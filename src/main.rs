@@ -17,7 +17,7 @@ fn main() {
     Application::new()
         .with_assets(assets::Icons)
         .run(move |cx: &mut App| {
-            let bounds = Bounds::centered(None, size(px(640.), px(320.)), cx);
+            let bounds = Bounds::centered(None, size(px(640.), px(240.)), cx);
             cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),

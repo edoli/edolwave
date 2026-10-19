@@ -459,7 +459,7 @@ impl PlayerView {
         div()
             .h(px(if narrow { 72. } else { 48. }))
             .flex_shrink_0()
-            .px(px(20.))
+            .px(px(16.))
             .flex()
             .map(|el| {
                 if narrow {
@@ -721,11 +721,11 @@ impl Render for PlayerView {
             }))
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| { this.finish_seek(cx); this.volume_drag = false; }))
             .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, cx| { this.finish_seek(cx); this.volume_drag = false; }))
-            .child(div().flex().flex_shrink_0().items_center().h(px(52.)).px(px(20.)).gap(px(14.))
+            .child(div().flex().flex_shrink_0().items_center().h(px(44.)).px(px(16.)).gap(px(14.))
                 .child(div().id("title-drag").flex_1().min_w_0().h_full().flex().items_center().gap(px(14.)).cursor_default()
                     .window_control_area(WindowControlArea::Drag)
                     .child(icon("wave", 26., 0x49caff))
-                    .child(div().min_w_0().flex_1().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).text_ellipsis().child(name)))
+                    .child(div().min_w_0().flex_1().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).text_ellipsis().child(name)))
                 .child(tool("open", "folder").on_click(cx.listener(|this, _, window, cx| this.choose(window, cx))))
                 .child(tool("settings", "settings").on_click(cx.listener(|this, _, _, cx| { this.settings = !this.settings; this.speed_menu_open = false; cx.notify(); })))
                 .child(div().w(px(1.)).h(px(20.)).bg(rgb(LINE)).mx_1())
@@ -733,7 +733,7 @@ impl Render for PlayerView {
                 .child(tool("maximize", "maximize").on_click(|_, w, _| w.zoom_window()))
                 .child(tool("close", "close").hover(|s| s.bg(rgb(0x663142))).on_click(|_, _, cx| cx.quit())))
             .child(
-                div().track_focus(&self.focus).flex_1().min_h_0().px(px(28.)).flex().flex_col()
+                div().track_focus(&self.focus).flex_1().min_h_0().px(px(16.)).flex().flex_col()
                     .child(self.waveform(cx))
                     .child(
                         div().h(px(20.)).flex_shrink_0().flex().items_center().justify_between().gap(px(12.))

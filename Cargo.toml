@@ -13,8 +13,17 @@ gpui = { version = "0.2.2", default-features = false, features = ["windows-manif
 rodio = { version = "0.23.0", default-features = false, features = ["playback", "symphonia-all", "symphonia-simd"] }
 
 [profile.release]
+opt-level = 2
+lto = "off"
+codegen-units = 16
+incremental = true
+
+[profile.release-dist]
+inherits = "release"
+opt-level = 3
 lto = "thin"
 codegen-units = 1
+incremental = false
 strip = "symbols"
 panic = "abort"
 
