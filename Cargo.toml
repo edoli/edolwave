@@ -1,0 +1,22 @@
+[package]
+name = "edolwave"
+version = "0.1.0"
+edition = "2024"
+
+description = "A fast, native waveform audio player built with GPUI"
+license = "MIT"
+rust-version = "1.96"
+
+[dependencies]
+anyhow = "1.0.104"
+gpui = { version = "0.2.2", default-features = false, features = ["windows-manifest"] }
+rodio = { version = "0.23.0", default-features = false, features = ["playback", "symphonia-all", "symphonia-simd"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+
+[profile.dev]
+debug = 1
