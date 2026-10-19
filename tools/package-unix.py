@@ -39,7 +39,14 @@ MIME_TYPES = (
 
 def run(*args: object, **kwargs: object) -> subprocess.CompletedProcess:
     print("+", " ".join(map(str, args)), flush=True)
-    return subprocess.run(list(map(str, args)), check=True, **kwargs)
+    try:
+        return subprocess.run(list(map(str, args)), check=True, **kwargs)
+    except subprocess.CalledProcessError as error:
+        if error.stdout:
+            print(error.stdout, file=sys.stderr)
+        if error.stderr:
+            print(error.stderr, file=sys.stderr)
+        raise
 
 
 def version() -> str:
@@ -180,6 +187,8 @@ def package_deb(binary: Path, stage: Path, desktop: Path, build_version: str) ->
                        capture_output=True, text=True).stdout.strip()
     dependencies = next(line.removeprefix("shlibs:Depends=") for line in dependencies.splitlines()
                         if line.startswith("shlibs:Depends="))
+    # GPUI loads these at runtime, so ELF dependency scanning cannot discover them.
+    dependencies += ", libvulkan1, libwayland-client0"
     control = root / "DEBIAN"
     control.mkdir()
     (control / "control").write_text(

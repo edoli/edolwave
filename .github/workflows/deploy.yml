@@ -64,7 +64,8 @@ jobs:
           }
 
       - name: Cache Cargo dependencies and builds
-        uses: actions/cache@v6
+        id: cargo-cache
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.cargo/registry
@@ -155,6 +156,17 @@ jobs:
             target/dist/SHA256SUMS-${{ matrix.suffix }}.txt
           if-no-files-found: error
           compression-level: 0
+
+      - name: Save Cargo build cache
+        if: always() && !cancelled() && steps.cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/debug
+            target/release-dist
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   release:
     name: Publish GitHub Release
