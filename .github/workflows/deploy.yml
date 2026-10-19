@@ -1,0 +1,144 @@
+name: Build and deploy
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*.*.*']
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    name: Windows x64 build and installer
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Validate version metadata
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            ./tools/version.ps1 -Tag $env:GITHUB_REF_NAME
+          } else {
+            ./tools/version.ps1
+          }
+
+      - name: Cache Cargo dependencies and builds
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/debug
+            target/release-dist
+          key: windows-x64-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'build.rs', '.github/workflows/deploy.yml') }}
+          restore-keys: windows-x64-cargo-
+
+      - name: Locate Windows SDK shader compiler
+        run: |
+          $fxc = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\fxc.exe" |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $fxc) { throw 'Windows SDK fxc.exe was not found.' }
+          "GPUI_FXC_PATH=$($fxc.FullName)" >> $env:GITHUB_ENV
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run tests
+        run: cargo test --locked
+
+      - name: Build optimized binary
+        run: cargo build --profile release-dist --locked
+
+      - name: Install Inno Setup
+        run: ./tools/install_inno.ps1
+
+      - name: Build installer, portable ZIP and checksums
+        run: ./tools/package.ps1 -NoBuild
+
+      - name: Test silent install and uninstall
+        run: |
+          $installDir = Join-Path $env:RUNNER_TEMP 'EdolWave-install-test'
+          $installer = (Resolve-Path 'target/dist/edolwave-installer-exe.exe').Path
+          try {
+            $process = Start-Process -FilePath $installer -WindowStyle Hidden -Wait -PassThru -ArgumentList @(
+              '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/CURRENTUSER',
+              '/NOICONS', '/TASKS=', ('/DIR="' + $installDir + '"'))
+            if ($process.ExitCode -ne 0) { throw "Install failed: $($process.ExitCode)" }
+            $installedExe = Join-Path $installDir 'edolwave.exe'
+            if ((Get-Item -LiteralPath $installedExe).VersionInfo.ProductVersion -ne (./tools/version.ps1)) {
+              throw 'Installed executable version does not match Cargo.toml.'
+            }
+            foreach ($dll in @('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll', 'concrt140.dll')) {
+              if (-not (Test-Path -LiteralPath (Join-Path $installDir $dll))) { throw "Missing runtime: $dll" }
+            }
+          } finally {
+            $uninstaller = Join-Path $installDir 'unins000.exe'
+            if (Test-Path -LiteralPath $uninstaller) {
+              $process = Start-Process -FilePath $uninstaller -WindowStyle Hidden -Wait -PassThru -ArgumentList @(
+                '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
+              if ($process.ExitCode -ne 0) { throw "Uninstall failed: $($process.ExitCode)" }
+            }
+          }
+          if (Test-Path -LiteralPath (Join-Path $installDir 'edolwave.exe')) { throw 'Uninstall left the executable behind.' }
+
+      - name: Upload Windows packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: edolwave-windows
+          path: |
+            target/dist/edolwave-installer-exe.exe
+            target/dist/edolwave-windows.zip
+            target/dist/SHA256SUMS.txt
+          if-no-files-found: error
+          compression-level: 0
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows packages
+        uses: actions/download-artifact@v8
+        with:
+          name: edolwave-windows
+          path: dist
+
+      - name: Verify package checksums
+        working-directory: dist
+        run: sha256sum --check SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            dist/edolwave-installer-exe.exe
+            dist/edolwave-windows.zip
+            dist/SHA256SUMS.txt
+          fail_on_unmatched_files: true
+          generate_release_notes: true

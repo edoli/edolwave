@@ -12,6 +12,9 @@ anyhow = "1.0.104"
 gpui = { version = "0.2.2", default-features = false, features = ["windows-manifest"] }
 rodio = { version = "0.23.0", default-features = false, features = ["playback", "symphonia-all", "symphonia-simd"] }
 
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
+
 [profile.release]
 opt-level = 2
 lto = "off"

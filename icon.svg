@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>EdolWave temporary waveform icon</title>
+  <rect x="8" y="8" width="496" height="496" rx="92" fill="#101820"/>
+  <g fill="none" stroke="#49caff" stroke-width="32" stroke-linecap="round">
+    <path d="M96 232v48M160 184v144M224 112v288M288 152v208M352 200v112M416 232v48"/>
+  </g>
+</svg>
