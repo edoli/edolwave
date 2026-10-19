@@ -423,7 +423,7 @@ impl PlayerView {
                                             .child("파형을 클릭하거나 드래그해 탐색합니다.")
                                             .child("볼륨·배속 위에서 휠로 조절합니다. 배속은 0.5~2배이며 음높이도 바뀝니다.")
                                             .child("여러 파일은 이전·다음 버튼으로 이동합니다.")
-                                            .child("Opus·WMA 등 추가 형식은 설치된 FFmpeg를 사용합니다.")
+                                            .child("WAV·MP3·FLAC·OGG/Vorbis·AAC·M4A·AIFF 등을 지원합니다.")
                                     )
                             )
                     )
@@ -778,14 +778,13 @@ impl Render for PlayerView {
             .as_ref()
             .map(|w| {
                 format!(
-                    "{} Hz  ·  {}  ·  {}",
+                    "{} Hz  ·  {}",
                     w.sample_rate,
                     if w.channels == 1 {
                         "Mono".into()
                     } else {
                         format!("{} ch", w.channels)
-                    },
-                    self.state.backend
+                    }
                 )
             })
             .unwrap_or_else(|| "NATIVE AUDIO PLAYER".into());

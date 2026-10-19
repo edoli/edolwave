@@ -11,7 +11,8 @@ $Installer = (Resolve-Path -LiteralPath $Installer).Path
 $InstallDirectory = [IO.Path]::GetFullPath($InstallDirectory)
 $expectedVersion = & (Join-Path $PSScriptRoot 'version.ps1')
 $formats = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\installer\audio-formats.json') -Raw | ConvertFrom-Json
-$extensions = @($formats.native) + @($formats.ffmpeg)
+$supported = @($formats.native)
+$extensions = $supported + @($formats.unsupported)
 $progId = "$RegistrationName.Audio"
 $capabilities = "Software\Edoli\$RegistrationName\Capabilities"
 $application = "Software\Classes\Applications\$ExecutableName"
@@ -92,15 +93,26 @@ function Assert-Associations([string[]]$Selected) {
 Assert-NoRegistration
 if (Test-Path -LiteralPath $InstallDirectory) { throw "Install test directory already exists: $InstallDirectory" }
 $defaultSnapshot = Get-DefaultSnapshot
-$allTasks = ($extensions | ForEach-Object { "fileassociations\$_" }) -join ','
+$allTasks = ($supported | ForEach-Object { "fileassociations\$_" }) -join ','
 $cases = @(
     @{ Name = 'default selection'; Selected = @($formats.native); Tasks = $null },
-    @{ Name = 'all formats'; Selected = $extensions; Tasks = $allTasks },
     @{ Name = 'upgrade to WAV and MP3 only'; Selected = @('wav', 'mp3'); Tasks = 'fileassociations\wav,fileassociations\mp3' },
     @{ Name = 'upgrade with associations disabled'; Selected = @(); Tasks = '' },
-    @{ Name = 're-enable all formats before uninstall'; Selected = $extensions; Tasks = $allTasks }
+    @{ Name = 're-enable all formats before uninstall'; Selected = $supported; Tasks = $allTasks }
 )
 try {
+    # Simulate old handlers to verify that an upgrade removes unsupported formats.
+    foreach ($extension in $formats.unsupported) {
+        foreach ($entry in @(
+            @{ Path = "Software\Classes\.$extension\OpenWithProgids"; Name = $progId; Value = '' },
+            @{ Path = "$application\SupportedTypes"; Name = ".$extension"; Value = '' },
+            @{ Path = "$capabilities\FileAssociations"; Name = ".$extension"; Value = $progId }
+        )) {
+            $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($entry.Path)
+            try { $key.SetValue($entry.Name, $entry.Value, [Microsoft.Win32.RegistryValueKind]::String) }
+            finally { $key.Dispose() }
+        }
+    }
     foreach ($case in $cases) {
         $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/CURRENTUSER',
             '/NOICONS', ('/DIR="' + $InstallDirectory + '"'))

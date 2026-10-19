@@ -4,15 +4,14 @@ use anyhow::{Context as _, Result, anyhow};
 use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source};
 use std::{
     fs::File,
-    path::{Path, PathBuf},
-    process::{Command as Process, Stdio},
+    path::PathBuf,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
         mpsc::{self, Receiver, Sender},
     },
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 #[derive(Clone)]
@@ -31,7 +30,6 @@ pub struct Snapshot {
     pub repeat: bool,
     pub waveform: Option<Arc<Waveform>>,
     pub error: Option<String>,
-    pub backend: &'static str,
 }
 
 impl Default for Snapshot {
@@ -50,7 +48,6 @@ impl Default for Snapshot {
             repeat: false,
             waveform: None,
             error: None,
-            backend: "Symphonia",
         }
     }
 }
@@ -129,7 +126,6 @@ struct Worker {
     output: Option<MixerDeviceSink>,
     player: Option<Player>,
     source: Option<PathBuf>,
-    temporary: Option<Arc<TemporaryAudio>>,
     id: u64,
     position_offset: Duration,
     analyses: Vec<thread::JoinHandle<()>>,
@@ -144,7 +140,6 @@ impl Worker {
             output: None,
             player: None,
             source: None,
-            temporary: None,
             id: 0,
             position_offset: Duration::ZERO,
             analyses: vec![],
@@ -225,7 +220,6 @@ impl Worker {
                 self.id = id;
                 self.player.take();
                 self.source.take();
-                self.temporary.take();
                 self.update(|s| {
                     s.path = Some(path.clone());
                     s.loading = true;
@@ -236,34 +230,25 @@ impl Worker {
                     s.position = Duration::ZERO;
                     s.duration = Duration::ZERO;
                 });
-                let (source, backend) = match Decoder::try_from(File::open(&path)?) {
-                    Ok(_) => (path.clone(), "Symphonia"),
-                    Err(native_error) => {
-                        let converted = self.convert(&path).with_context(|| format!("이 파일을 열 수 없습니다 ({native_error}). 추가 형식은 FFmpeg가 필요합니다"))?;
-                        self.temporary = Some(Arc::new(TemporaryAudio(converted.clone())));
-                        (converted, "FFmpeg")
-                    }
-                };
+                Decoder::try_from(File::open(&path)?)
+                    .context("지원하지 않는 오디오 형식이거나 손상된 파일입니다")?;
                 if id != self.generation.load(Ordering::Relaxed) {
                     return Ok(());
                 }
-                self.source = Some(source.clone());
+                self.source = Some(path.clone());
                 self.restart(true, Duration::ZERO)?;
                 self.update(|s| {
                     s.loading = false;
                     s.analyzing = true;
-                    s.backend = backend;
                 });
                 let (tx, generation) = (self.tx.clone(), self.generation.clone());
-                let temporary = self.temporary.clone();
                 self.analyses.retain(|task| !task.is_finished());
                 let task = thread::Builder::new()
                     .name("waveform".into())
                     .spawn(move || {
                         let result =
-                            waveform::analyze(&source, &generation, id).map_err(|e| e.to_string());
+                            waveform::analyze(&path, &generation, id).map_err(|e| e.to_string());
                         let _ = tx.send(Command::Waveform(id, result));
-                        drop(temporary);
                     })?;
                 self.analyses.push(task);
             }
@@ -365,10 +350,7 @@ impl Worker {
         player.pause();
         player.set_volume(s.volume);
         player.set_speed(s.speed);
-        player.append(LeasedSource {
-            inner: source,
-            _temporary: self.temporary.clone(),
-        });
+        player.append(source);
         self.player = Some(player);
         self.position_offset = pos;
         if playing {
@@ -383,48 +365,6 @@ impl Worker {
         });
         Ok(())
     }
-
-    fn convert(&self, path: &Path) -> Result<PathBuf> {
-        let out =
-            std::env::temp_dir().join(format!("edolwave-{}-{}.wav", std::process::id(), self.id));
-        let executable = std::env::var_os("EDOLWAVE_FFMPEG").unwrap_or_else(|| "ffmpeg".into());
-        let mut command = Process::new(executable);
-        command
-            .args(["-v", "error", "-nostdin", "-y", "-i"])
-            .arg(path)
-            .args(["-map", "0:a:0", "-vn", "-acodec", "pcm_f32le"])
-            .arg(&out)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000);
-        }
-        let mut child = command
-            .spawn()
-            .context("FFmpeg 실행 실패: PATH 또는 EDOLWAVE_FFMPEG를 확인하세요")?;
-        let started = Instant::now();
-        loop {
-            if let Some(status) = child.try_wait()? {
-                if status.success() {
-                    return Ok(out);
-                }
-                let _ = std::fs::remove_file(&out);
-                return Err(anyhow!("FFmpeg에서 지원하지 않거나 손상된 파일입니다"));
-            }
-            if self.generation.load(Ordering::Relaxed) != self.id
-                || started.elapsed() > Duration::from_secs(120)
-            {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = std::fs::remove_file(&out);
-                return Err(anyhow!("파일 변환이 취소되었거나 제한 시간을 초과했습니다"));
-            }
-            thread::sleep(Duration::from_millis(20));
-        }
-    }
 }
 
 impl Drop for Worker {
@@ -435,46 +375,5 @@ impl Drop for Worker {
         for task in self.analyses.drain(..) {
             let _ = task.join();
         }
-        self.temporary.take();
-    }
-}
-
-// Windows cannot unlink a file while the waveform decoder has it open.
-struct TemporaryAudio(PathBuf);
-impl Drop for TemporaryAudio {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
-}
-
-// Keep converted audio alive until the output callback also releases its decoder.
-struct LeasedSource<S> {
-    inner: S,
-    _temporary: Option<Arc<TemporaryAudio>>,
-}
-impl<S: Source> Iterator for LeasedSource<S> {
-    type Item = f32;
-    fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next()
-    }
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
-    }
-}
-impl<S: Source> Source for LeasedSource<S> {
-    fn current_span_len(&self) -> Option<usize> {
-        self.inner.current_span_len()
-    }
-    fn channels(&self) -> rodio::ChannelCount {
-        self.inner.channels()
-    }
-    fn sample_rate(&self) -> rodio::SampleRate {
-        self.inner.sample_rate()
-    }
-    fn total_duration(&self) -> Option<Duration> {
-        self.inner.total_duration()
-    }
-    fn try_seek(&mut self, pos: Duration) -> Result<(), rodio::source::SeekError> {
-        self.inner.try_seek(pos)
     }
 }

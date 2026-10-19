@@ -30,5 +30,3 @@ cargo build --profile release-dist
 ## 지원 형식
 
 WAV, MP3, FLAC, OGG/Vorbis, AAC, M4A/MP4, AIFF 등을 기본 지원합니다. 컨테이너 내부 코덱에 따라 지원 여부가 달라집니다.
-
-Opus, WMA, APE 등 추가 형식은 별도로 설치한 FFmpeg를 사용합니다. FFmpeg를 `PATH`에 추가하거나 `EDOLWAVE_FFMPEG` 환경 변수에 실행 파일 경로를 지정하세요.

@@ -58,6 +58,37 @@ fn decode_real_pcm_and_cancel_obsolete_analysis() {
     assert!(waveform::analyze(&f.0, &generation, 6).unwrap().is_none());
 }
 
+#[test]
+fn unsupported_audio_stops_loading_without_opening_an_output_device() {
+    let player = Audio::new();
+    for extension in ["opus", "wma", "ape"] {
+        let path = std::env::temp_dir().join(format!(
+            "edolwave-unsupported-test-{}.{extension}",
+            std::process::id()
+        ));
+        fs::write(&path, b"unsupported audio data").unwrap();
+        let fixture = Fixture(path);
+        player.load(fixture.0.clone());
+        let started = Instant::now();
+        loop {
+            let state = player.snapshot();
+            if state.path.as_ref() == Some(&fixture.0)
+                && let Some(error) = &state.error
+            {
+                assert!(error.contains("지원하지 않는 오디오 형식"), "{error}");
+                assert!(!state.loading);
+                assert!(!state.playing);
+                assert!(!state.analyzing);
+                assert!(state.waveform.is_none());
+                assert!(state.duration.is_zero());
+                break;
+            }
+            assert!(started.elapsed() < Duration::from_secs(3));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
+
 fn wait(audio: &Audio, description: &str, condition: impl Fn(&Snapshot) -> bool) -> Snapshot {
     let start = Instant::now();
     loop {
@@ -86,7 +117,28 @@ fn real_output_play_pause_seek_repeat_and_format_matrix() {
             fs::read_dir(dir)
                 .unwrap()
                 .map(|p| p.unwrap().path())
-                .filter(|p| p.is_file()),
+                .filter(|p| {
+                    p.is_file()
+                        && matches!(
+                            p.extension().and_then(|extension| extension.to_str()),
+                            Some(
+                                "wav"
+                                    | "wave"
+                                    | "mp3"
+                                    | "flac"
+                                    | "ogg"
+                                    | "oga"
+                                    | "aac"
+                                    | "m4a"
+                                    | "m4b"
+                                    | "aif"
+                                    | "aiff"
+                                    | "aifc"
+                                    | "caf"
+                                    | "mka"
+                            )
+                        )
+                }),
         );
     }
     for path in files {
@@ -96,10 +148,9 @@ fn real_output_play_pause_seek_repeat_and_format_matrix() {
             s.path.as_ref() == Some(&path) && s.playing && s.waveform.is_some()
         });
         println!(
-            "{}: {} ms, {}, {:?}",
+            "{}: {} ms, {:?}",
             path.display(),
             started.elapsed().as_millis(),
-            s.backend,
             s.duration
         );
         assert!(!s.duration.is_zero());
@@ -129,6 +180,35 @@ fn real_output_play_pause_seek_repeat_and_format_matrix() {
         });
         player.send(Command::Speed(1.));
     }
+    if let Some(dir) = std::env::var_os("EDOLWAVE_TEST_AUDIO_DIR") {
+        for path in fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                matches!(
+                    path.extension().and_then(|extension| extension.to_str()),
+                    Some("opus" | "wma" | "ape")
+                )
+            })
+        {
+            player.load(path.clone());
+            let started = Instant::now();
+            loop {
+                let state = player.snapshot();
+                if state.path.as_ref() == Some(&path)
+                    && let Some(error) = &state.error
+                {
+                    assert!(error.contains("지원하지 않는 오디오 형식"), "{error}");
+                    assert!(!state.loading && !state.playing && !state.analyzing);
+                    assert!(state.waveform.is_none());
+                    println!("{}: rejected as unsupported", path.display());
+                    break;
+                }
+                assert!(started.elapsed() < Duration::from_secs(3));
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
     // An unreadable file must not poison subsequent loads.
     player.load(PathBuf::from("nonexistent-edolwave-file.wav"));
     let start = Instant::now();
@@ -145,16 +225,4 @@ fn real_output_play_pause_seek_repeat_and_format_matrix() {
     wait(&player, "error recovery", |s| {
         s.path.as_ref() == Some(&fixture.0) && s.playing
     });
-    drop(player);
-    let prefix = format!("edolwave-{}-", std::process::id());
-    assert!(
-        !fs::read_dir(std::env::temp_dir()).unwrap().any(|entry| {
-            entry
-                .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .starts_with(&prefix)
-        }),
-        "converted audio must be cleaned up when the player closes"
-    );
 }
