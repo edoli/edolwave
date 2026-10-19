@@ -28,6 +28,8 @@ pub struct Instance {
     _lock: File,
     shutdown: Option<oneshot::Sender<()>>,
     worker: Option<JoinHandle<()>>,
+    #[cfg(target_os = "macos")]
+    requests: Sender<Vec<PathBuf>>,
 }
 
 type Primary = (Instance, Receiver<Vec<PathBuf>>);
@@ -54,6 +56,11 @@ fn socket_name(directory: &Path) -> std::io::Result<Name<'static>> {
 }
 
 impl Instance {
+    #[cfg(target_os = "macos")]
+    pub fn request_sender(&self) -> Sender<Vec<PathBuf>> {
+        self.requests.clone()
+    }
+
     /// None means the existing process accepted this launch; no UI should be created.
     pub fn acquire(files: &[PathBuf]) -> Result<Option<Primary>> {
         let mut directory = dirs::cache_dir()
@@ -132,6 +139,8 @@ impl Instance {
             options.create_tokio()?
         };
         let (sender, receiver) = async_channel::bounded(64);
+        #[cfg(target_os = "macos")]
+        let requests = sender.clone();
         let (shutdown, stopped) = oneshot::channel();
         let worker = thread::Builder::new()
             .name("instance".into())
@@ -152,6 +161,8 @@ impl Instance {
                 _lock: lock,
                 shutdown: Some(shutdown),
                 worker: Some(worker),
+                #[cfg(target_os = "macos")]
+                requests,
             },
             receiver,
         ))
@@ -220,7 +231,8 @@ mod tests {
     struct Directory(PathBuf);
     impl Directory {
         fn new() -> Self {
-            Self(std::env::temp_dir().join(format!("edolwave-instance-test-{}", Uuid::new_v4())))
+            // macOS has a long temporary-directory prefix and a short Unix socket path limit.
+            Self(std::env::temp_dir().join(format!("ew-{:016x}", Uuid::new_v4().as_u128() as u64)))
         }
     }
     impl Drop for Directory {
