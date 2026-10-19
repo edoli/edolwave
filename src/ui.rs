@@ -157,6 +157,22 @@ impl PlayerView {
         cx.notify();
     }
 
+    pub fn open_from_instance(
+        &mut self,
+        files: Vec<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !files.is_empty() {
+            self.open(files, cx);
+        }
+        self.info_open = false;
+        self.speed_menu_open = false;
+        window.focus(&self.focus);
+        window.activate_window();
+        cx.notify();
+    }
+
     fn choose(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: true,
