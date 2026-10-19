@@ -1,0 +1,4 @@
+{
+  "native": ["wav", "wave", "mp3", "flac", "ogg", "oga", "aac", "m4a", "m4b", "aif", "aiff", "aifc", "caf", "mka"],
+  "ffmpeg": ["opus", "wma", "ape"]
+}

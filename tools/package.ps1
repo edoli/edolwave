@@ -63,8 +63,11 @@ try {
             Copy-Item -LiteralPath (Join-Path $crt.FullName $dll) -Destination $stage
         }
 
-        & $Compiler "/DAppVersion=$version" "/DSourceExe=$stage\edolwave.exe" "/DOutputPath=$OutputDirectory" "/DProjectRoot=$projectRoot" (Join-Path $projectRoot 'installer\edolwave.iss')
+        $associationsFile = Join-Path $stage 'file-associations.iss'
+        & (Join-Path $PSScriptRoot 'generate-associations.ps1') -OutputFile $associationsFile
+        & $Compiler "/DAppVersion=$version" "/DSourceExe=$stage\edolwave.exe" "/DOutputPath=$OutputDirectory" "/DProjectRoot=$projectRoot" "/DAssociationsFile=$associationsFile" (Join-Path $projectRoot 'installer\edolwave.iss')
         if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed' }
+        Remove-Item -LiteralPath $associationsFile
         $installer = Join-Path $OutputDirectory 'edolwave-installer-exe.exe'
         $portable = Join-Path $OutputDirectory 'edolwave-windows.zip'
         Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $portable -Force

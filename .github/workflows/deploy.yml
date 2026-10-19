@@ -77,31 +77,8 @@ jobs:
       - name: Build installer, portable ZIP and checksums
         run: ./tools/package.ps1 -NoBuild
 
-      - name: Test silent install and uninstall
-        run: |
-          $installDir = Join-Path $env:RUNNER_TEMP 'EdolWave-install-test'
-          $installer = (Resolve-Path 'target/dist/edolwave-installer-exe.exe').Path
-          try {
-            $process = Start-Process -FilePath $installer -WindowStyle Hidden -Wait -PassThru -ArgumentList @(
-              '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/CURRENTUSER',
-              '/NOICONS', '/TASKS=', ('/DIR="' + $installDir + '"'))
-            if ($process.ExitCode -ne 0) { throw "Install failed: $($process.ExitCode)" }
-            $installedExe = Join-Path $installDir 'edolwave.exe'
-            if ((Get-Item -LiteralPath $installedExe).VersionInfo.ProductVersion -ne (./tools/version.ps1)) {
-              throw 'Installed executable version does not match Cargo.toml.'
-            }
-            foreach ($dll in @('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll', 'concrt140.dll')) {
-              if (-not (Test-Path -LiteralPath (Join-Path $installDir $dll))) { throw "Missing runtime: $dll" }
-            }
-          } finally {
-            $uninstaller = Join-Path $installDir 'unins000.exe'
-            if (Test-Path -LiteralPath $uninstaller) {
-              $process = Start-Process -FilePath $uninstaller -WindowStyle Hidden -Wait -PassThru -ArgumentList @(
-                '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
-              if ($process.ExitCode -ne 0) { throw "Uninstall failed: $($process.ExitCode)" }
-            }
-          }
-          if (Test-Path -LiteralPath (Join-Path $installDir 'edolwave.exe')) { throw 'Uninstall left the executable behind.' }
+      - name: Test installation, file associations and uninstall
+        run: ./tools/test-installer.ps1
 
       - name: Upload Windows packages
         uses: actions/upload-artifact@v7
