@@ -3,8 +3,8 @@ use crate::waveform_view::WaveformCache;
 use gpui::{
     BorderStyle, Bounds, Context, Div, ExternalPaths, FocusHandle, FontWeight, IntoElement,
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, PathPromptOptions, Pixels, Render,
-    Stateful, Svg, Timer, Window, WindowControlArea, canvas, div, fill, point, prelude::*, px,
-    quad, rgb, size, svg, transparent_black,
+    ScrollWheelEvent, Stateful, Svg, Timer, Window, WindowControlArea, canvas, div, point,
+    prelude::*, px, quad, rgb, size, svg, transparent_black,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -59,7 +59,8 @@ pub struct PlayerView {
     seek_preview: SeekPreview,
     waveform_cache: Rc<RefCell<WaveformCache>>,
     volume_drag: bool,
-    speed_drag: bool,
+    speed_menu_open: bool,
+    volume_preview: Option<f32>,
     speed_preview: Option<f32>,
     last_volume: f32,
     settings: bool,
@@ -86,6 +87,9 @@ impl PlayerView {
                         let state = this.audio.snapshot();
                         if state.revision != this.state.revision {
                             this.seek_preview.acknowledge(state.seek_revision);
+                            if this.volume_preview == Some(state.volume) {
+                                this.volume_preview = None;
+                            }
                             if this.speed_preview == Some(state.speed) {
                                 this.speed_preview = None;
                             }
@@ -125,7 +129,8 @@ impl PlayerView {
             seek_preview: SeekPreview::default(),
             waveform_cache: Rc::new(RefCell::new(WaveformCache::default())),
             volume_drag: false,
-            speed_drag: false,
+            speed_menu_open: false,
+            volume_preview: None,
             speed_preview: None,
             last_volume: 0.8,
             settings: false,
@@ -218,24 +223,25 @@ impl PlayerView {
             .unwrap_or_else(|| self.seek_preview.position(self.state.position))
     }
 
+    fn displayed_volume(&self) -> f32 {
+        self.volume_preview.unwrap_or(self.state.volume)
+    }
+
+    fn set_volume(&mut self, volume: f32, cx: &mut Context<Self>) {
+        let volume = volume.clamp(0., 1.);
+        self.volume_preview = Some(volume);
+        self.audio.send(Command::Volume(volume));
+        cx.notify();
+    }
+
     fn set_volume_at(&mut self, x: Pixels, cx: &mut Context<Self>) {
-        let b = self.volume_bounds.get();
-        if b.size.width > px(0.) {
-            let v = ((x - b.origin.x) / b.size.width).clamp(0., 1.);
-            self.audio.send(Command::Volume(v));
-            self.state.volume = v;
-            cx.notify();
+        let bounds = self.volume_bounds.get();
+        if bounds.size.width > px(0.) {
+            self.set_volume((x - bounds.origin.x) / bounds.size.width, cx);
         }
     }
 
-    fn set_speed_at(&mut self, x: Pixels, cx: &mut Context<Self>) {
-        let bounds = self.speed_bounds.get();
-        if bounds.size.width <= px(0.) {
-            return;
-        }
-        let fraction = ((x - bounds.origin.x) / bounds.size.width).clamp(0., 1.);
-        let index = (fraction * (SPEED_STEPS.len() - 1) as f32).round() as usize;
-        let speed = SPEED_STEPS[index];
+    fn set_speed(&mut self, speed: f32, cx: &mut Context<Self>) {
         if speed != self.speed_preview.unwrap_or(self.state.speed) {
             self.speed_preview = Some(speed);
             self.audio.send(Command::Speed(speed));
@@ -243,80 +249,109 @@ impl PlayerView {
         }
     }
 
-    fn speed_slider(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn scroll_speed(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
+        let delta = event.delta.pixel_delta(px(16.)).y;
+        if delta != px(0.) {
+            let speed = self.speed_preview.unwrap_or(self.state.speed);
+            let index = SPEED_STEPS
+                .iter()
+                .position(|&step| step == speed)
+                .unwrap_or(2);
+            let next = if delta > px(0.) {
+                (index + 1).min(SPEED_STEPS.len() - 1)
+            } else {
+                index.saturating_sub(1)
+            };
+            self.set_speed(SPEED_STEPS[next], cx);
+        }
+        cx.stop_propagation();
+    }
+
+    fn speed_dropdown(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let cell = self.speed_bounds.clone();
-        let speed = self.speed_preview.unwrap_or(self.state.speed);
-        let selected = SPEED_STEPS
-            .iter()
-            .position(|&step| step == speed)
-            .unwrap_or(2);
         div()
-            .id("speed-slider")
-            .w(px(112.))
-            .h(px(32.))
+            .id("speed-dropdown")
+            .relative()
+            .w(px(80.))
+            .h(px(28.))
             .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_between()
+            .px(px(10.))
+            .rounded(px(6.))
+            .border_1()
+            .border_color(rgb(if self.speed_menu_open { BLUE } else { LINE }))
+            .bg(rgb(PANEL))
+            .text_size(px(12.))
             .cursor_pointer()
+            .hover(|s| s.bg(rgb(0x26364b)))
             .child(
-                canvas(
-                    move |bounds, _, _| {
-                        cell.set(Bounds::new(
-                            bounds.origin + point(px(6.), px(0.)),
-                            size(bounds.size.width - px(12.), bounds.size.height),
-                        ));
-                    },
-                    move |bounds, _, window, _| {
-                        let left = bounds.origin.x + px(6.);
-                        let width = bounds.size.width - px(12.);
-                        let y = bounds.origin.y + px(11.);
-                        let position = width * selected as f32 / (SPEED_STEPS.len() - 1) as f32;
-                        window.paint_quad(quad(
-                            Bounds::new(point(left, y - px(1.5)), size(width, px(3.))),
-                            px(1.5),
-                            rgb(LINE),
-                            px(0.),
-                            transparent_black(),
-                            BorderStyle::Solid,
-                        ));
-                        window.paint_quad(quad(
-                            Bounds::new(point(left, y - px(1.5)), size(position, px(3.))),
-                            px(1.5),
-                            rgb(BLUE),
-                            px(0.),
-                            transparent_black(),
-                            BorderStyle::Solid,
-                        ));
-                        for i in 0..SPEED_STEPS.len() {
-                            let x = left + width * i as f32 / (SPEED_STEPS.len() - 1) as f32;
-                            window.paint_quad(fill(
-                                Bounds::new(
-                                    point(x - px(0.5), y + px(8.)),
-                                    size(px(1.), px(if i == 2 { 6. } else { 3. })),
-                                ),
-                                rgb(if i == selected { BLUE } else { MUTED }),
-                            ));
-                        }
-                        window.paint_quad(quad(
-                            Bounds::new(
-                                point(left + position - px(4.5), y - px(4.5)),
-                                size(px(9.), px(9.)),
-                            ),
-                            px(4.5),
-                            rgb(TEXT),
-                            px(0.),
-                            transparent_black(),
-                            BorderStyle::Solid,
-                        ));
-                    },
-                )
-                .size_full(),
+                canvas(move |bounds, _, _| cell.set(bounds), |_, _, _, _| {})
+                    .absolute()
+                    .size_full()
+                    .top_0()
+                    .left_0(),
             )
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                    this.speed_drag = true;
-                    this.set_speed_at(event.position.x, cx);
-                }),
-            )
+            .child(format!(
+                "{:.2}×",
+                self.speed_preview.unwrap_or(self.state.speed)
+            ))
+            .child(icon("chevron", 12., MUTED))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.speed_menu_open = !this.speed_menu_open;
+                this.settings = false;
+                cx.notify();
+            }))
+            .on_scroll_wheel(cx.listener(|this, event, _, cx| this.scroll_speed(event, cx)))
+    }
+
+    fn speed_menu(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let bounds = self.speed_bounds.get();
+        let viewport = window.viewport_size();
+        let selected = self.speed_preview.unwrap_or(self.state.speed);
+        div()
+            .id("speed-menu")
+            .occlude()
+            .absolute()
+            .left(bounds.origin.x.min(viewport.width - px(104.)).max(px(8.)))
+            .bottom(viewport.height - bounds.origin.y + px(4.))
+            .w(px(96.))
+            .p(px(4.))
+            .flex()
+            .flex_col()
+            .rounded(px(7.))
+            .bg(rgb(0x202c3d))
+            .border_1()
+            .border_color(rgb(0x3b4d65))
+            .shadow_lg()
+            .children(SPEED_STEPS.into_iter().enumerate().map(|(index, speed)| {
+                div()
+                    .id(("speed-option", index))
+                    .h(px(24.))
+                    .flex_shrink_0()
+                    .px(px(8.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(3.))
+                    .text_size(px(12.))
+                    .cursor_pointer()
+                    .when(speed == selected, |el| el.bg(rgb(BLUE)))
+                    .hover(|el| el.bg(rgb(0x36577d)))
+                    .child(format!("{speed:.2}×"))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.set_speed(speed, cx);
+                        this.speed_menu_open = false;
+                        cx.notify();
+                    }))
+            }))
+            .on_scroll_wheel(cx.listener(|this, event, _, cx| this.scroll_speed(event, cx)))
+            .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                if !this.speed_bounds.get().contains(&event.position) {
+                    this.speed_menu_open = false;
+                    cx.notify();
+                }
+            }))
     }
 
     fn controls(&self, narrow: bool, cx: &mut Context<Self>) -> Div {
@@ -356,13 +391,13 @@ impl PlayerView {
             .child(
                 tool(
                     "mute",
-                    if self.state.volume == 0. {
+                    if self.displayed_volume() == 0. {
                         "mute"
                     } else {
                         "volume"
                     },
                 )
-                .on_click(cx.listener(|this, _, _, _| this.mute())),
+                .on_click(cx.listener(|this, _, _, cx| this.mute(cx))),
             )
             .child(self.volume(cx))
             .child(
@@ -370,7 +405,10 @@ impl PlayerView {
                     .w(px(28.))
                     .text_size(px(11.))
                     .text_color(rgb(MUTED))
-                    .child(format!("{}%", (self.state.volume * 100.).round() as u32)),
+                    .child(format!(
+                        "{}%",
+                        (self.displayed_volume() * 100.).round() as u32
+                    )),
             );
         let speed = div()
             .flex()
@@ -383,11 +421,7 @@ impl PlayerView {
                     .text_color(rgb(MUTED))
                     .child("재생 속도"),
             )
-            .child(self.speed_slider(cx))
-            .child(div().w(px(40.)).text_size(px(12.)).child(format!(
-                "{:.2}×",
-                self.speed_preview.unwrap_or(self.state.speed)
-            )));
+            .child(self.speed_dropdown(cx));
         let repeat = div()
             .id("repeat")
             .flex()
@@ -396,7 +430,7 @@ impl PlayerView {
             .gap(px(8.))
             .cursor_pointer()
             .px_2()
-            .py_2()
+            .py_1()
             .rounded_md()
             .hover(|s| s.bg(rgb(PANEL)))
             .child(icon(
@@ -433,7 +467,8 @@ impl PlayerView {
                         .gap(px(8.))
                         .child(
                             div()
-                                .h(px(44.))
+                                .h(px(32.))
+                                .flex_shrink_0()
                                 .flex()
                                 .items_center()
                                 .justify_between()
@@ -442,7 +477,8 @@ impl PlayerView {
                         )
                         .child(
                             div()
-                                .h(px(44.))
+                                .h(px(32.))
+                                .flex_shrink_0()
                                 .flex()
                                 .items_center()
                                 .justify_between()
@@ -484,16 +520,13 @@ impl PlayerView {
                 cx,
             ),
             "home" => self.seek_to(Duration::ZERO, cx),
-            "up" => self
-                .audio
-                .send(Command::Volume((self.state.volume + 0.05).min(1.))),
-            "down" => self
-                .audio
-                .send(Command::Volume((self.state.volume - 0.05).max(0.))),
+            "up" => self.set_volume(self.displayed_volume() + 0.05, cx),
+            "down" => self.set_volume(self.displayed_volume() - 0.05, cx),
             "r" => self.audio.send(Command::Repeat),
-            "m" => self.mute(),
+            "m" => self.mute(cx),
             "escape" => {
                 self.settings = false;
+                self.speed_menu_open = false;
                 self.scrubbing = None;
                 cx.notify();
             }
@@ -501,14 +534,15 @@ impl PlayerView {
         }
     }
 
-    fn mute(&mut self) {
-        let v = if self.state.volume > 0. {
-            self.last_volume = self.state.volume;
+    fn mute(&mut self, cx: &mut Context<Self>) {
+        let volume = self.displayed_volume();
+        let v = if volume > 0. {
+            self.last_volume = volume;
             0.
         } else {
             self.last_volume.max(0.05)
         };
-        self.audio.send(Command::Volume(v));
+        self.set_volume(v, cx);
     }
 
     fn waveform(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -573,7 +607,7 @@ impl PlayerView {
 
     fn volume(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let cell = self.volume_bounds.clone();
-        let v = self.state.volume;
+        let v = self.displayed_volume();
         div()
             .id("volume-bar")
             .w(px(80.))
@@ -622,6 +656,14 @@ impl PlayerView {
                     this.set_volume_at(e.position.x, cx);
                 }),
             )
+            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
+                let delta = event.delta.pixel_delta(px(16.)).y;
+                if delta != px(0.) {
+                    let step = if delta > px(0.) { 0.05 } else { -0.05 };
+                    this.set_volume(this.displayed_volume() + step, cx);
+                }
+                cx.stop_propagation();
+            }))
     }
 }
 
@@ -646,12 +688,6 @@ impl Render for PlayerView {
             .and_then(|p| p.file_name())
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "EdolWave".into());
-        let path = self
-            .state
-            .path
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_default();
         let pos = self.displayed_position();
         let metadata = self
             .state
@@ -678,43 +714,47 @@ impl Render for PlayerView {
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| {
                 if !e.pressed_button.is_some_and(|b| b == MouseButton::Left) {
                     if this.scrubbing.is_some() { this.finish_seek(cx); }
-                    this.volume_drag = false; this.speed_drag = false; return;
+                    this.volume_drag = false; return;
                 }
                 if this.scrubbing.is_some() { this.scrubbing = Some(this.fraction(e.position.x)); cx.notify(); }
                 if this.volume_drag { this.set_volume_at(e.position.x, cx); }
-                if this.speed_drag { this.set_speed_at(e.position.x, cx); }
             }))
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| { this.finish_seek(cx); this.volume_drag = false; this.speed_drag = false; }))
-            .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, cx| { this.finish_seek(cx); this.volume_drag = false; this.speed_drag = false; }))
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| { this.finish_seek(cx); this.volume_drag = false; }))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, cx| { this.finish_seek(cx); this.volume_drag = false; }))
             .child(div().flex().flex_shrink_0().items_center().h(px(52.)).px(px(20.)).gap(px(14.))
                 .child(div().id("title-drag").flex_1().min_w_0().h_full().flex().items_center().gap(px(14.)).cursor_default()
                     .window_control_area(WindowControlArea::Drag)
                     .child(icon("wave", 26., 0x49caff))
                     .child(div().min_w_0().flex_1().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).text_ellipsis().child(name)))
                 .child(tool("open", "folder").on_click(cx.listener(|this, _, window, cx| this.choose(window, cx))))
-                .child(tool("settings", "settings").on_click(cx.listener(|this, _, _, cx| { this.settings = !this.settings; cx.notify(); })))
+                .child(tool("settings", "settings").on_click(cx.listener(|this, _, _, cx| { this.settings = !this.settings; this.speed_menu_open = false; cx.notify(); })))
                 .child(div().w(px(1.)).h(px(20.)).bg(rgb(LINE)).mx_1())
                 .child(tool("minimize", "minimize").on_click(|_, w, _| w.minimize_window()))
                 .child(tool("maximize", "maximize").on_click(|_, w, _| w.zoom_window()))
                 .child(tool("close", "close").hover(|s| s.bg(rgb(0x663142))).on_click(|_, _, cx| cx.quit())))
-            .child(div().track_focus(&self.focus).flex_1().min_h_0().px(px(28.)).flex().flex_col()
-                .child(self.waveform(cx))
-                .child(div().h(px(20.)).flex().items_center()
-                    .child(div().flex().items_center().gap(px(8.)).text_size(px(12.)).line_height(px(16.)).font_weight(FontWeight::SEMIBOLD)
-                        .child(div().text_color(rgb(BLUE)).child(time(pos)))
-                        .child(div().text_color(rgb(0x65758c)).child("/"))
-                        .child(div().text_color(rgb(MUTED)).child(time(self.state.duration))))))
+            .child(
+                div().track_focus(&self.focus).flex_1().min_h_0().px(px(28.)).flex().flex_col()
+                    .child(self.waveform(cx))
+                    .child(
+                        div().h(px(20.)).flex_shrink_0().flex().items_center().justify_between().gap(px(12.))
+                            .child(
+                                div().flex().flex_shrink_0().items_center().gap(px(8.)).text_size(px(12.)).line_height(px(16.)).font_weight(FontWeight::SEMIBOLD)
+                                    .child(div().text_color(rgb(BLUE)).child(time(pos)))
+                                    .child(div().text_color(rgb(0x65758c)).child("/"))
+                                    .child(div().text_color(rgb(MUTED)).child(time(self.state.duration)))
+                            )
+                            .child(div().min_w_0().text_ellipsis().text_size(px(10.)).text_color(rgb(0x65758c)).child(metadata))
+                    )
+            )
             .child(self.controls(narrow, cx))
             .when_some(self.state.error.clone(), |el, error| el.child(div().h(px(24.)).flex_shrink_0().px(px(28.)).text_size(px(11.)).text_color(rgb(0xffa9a9)).text_ellipsis().child(error)))
-            .child(div().h(px(29.)).flex_shrink_0().px(px(28.)).flex().items_center().gap(px(16.)).border_t_1().border_color(rgb(0x202c3c)).text_size(px(10.)).text_color(rgb(0x65758c))
-                .child(div().flex_1().min_w_0().text_ellipsis().child(path))
-                .child(div().flex_shrink_0().child(metadata)))
             .when(self.settings, |el| el.child(div().id("help-panel").absolute().top(px(48.)).right(px(20.)).w(px(306.)).max_h(px(260.)).overflow_y_scroll().rounded_lg().bg(rgb(0x202c3d)).border_1().border_color(rgb(0x3b4d65)).shadow_lg()
                 .child(div().p_5().flex().flex_col().gap_3()
                 .child(div().font_weight(FontWeight::SEMIBOLD).child("EdolWave · 빠른 사용 안내"))
                 .children([("파일 열기", "Ctrl + O"), ("재생 / 일시정지", "Space"), ("5초 탐색", "← / →"), ("처음으로", "Home"), ("볼륨", "↑ / ↓"), ("음소거 / 반복", "M / R")].into_iter().map(|(a,b)| div().flex().justify_between().text_size(px(12.)).child(a).child(div().text_color(rgb(MUTED)).child(b))))
-                .child(div().border_t_1().border_color(rgb(LINE)).pt_3().text_size(px(11.)).text_color(rgb(MUTED)).child("여러 파일을 함께 열면 이전/다음 버튼으로 이동합니다. 배속 슬라이더는 0.5–2배 사이에서 0.25배 간격으로 선택합니다. 배속에 따라 음높이도 바뀝니다."))
+                .child(div().border_t_1().border_color(rgb(LINE)).pt_3().text_size(px(11.)).text_color(rgb(MUTED)).child("여러 파일을 함께 열면 이전/다음 버튼으로 이동합니다. 배속은 드롭다운에서 선택합니다. 볼륨과 배속 위에서 휠로 조절할 수 있습니다. 배속에 따라 음높이도 바뀝니다."))
                 .child(div().text_size(px(11.)).text_color(rgb(MUTED)).child("Opus · WMA · APE 등은 설치된 FFmpeg를 자동으로 사용합니다.")))))
+            .when(self.speed_menu_open, |el| el.child(self.speed_menu(window, cx)))
     }
 }
 
