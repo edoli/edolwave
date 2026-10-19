@@ -30,9 +30,7 @@ impl AssetSource for Icons {
             "close" => r#"<path d="m6 6 12 12M18 6 6 18"/>"#,
             "minimize" => r#"<path d="M5 12h14"/>"#,
             "maximize" => r#"<rect x="5" y="5" width="14" height="14" rx="1"/>"#,
-            "settings" => {
-                r#"<path d="m9 3 1-1h4l1 3 3 1 3-1 2 4-2 2v3l2 2-2 4-3-1-3 1-1 3h-4l-1-3-3-1-3 1-2-4 2-2v-3L1 9l2-4 3 1 3-1Z"/><circle cx="12" cy="12" r="3"/>"#
-            }
+            "info" => r#"<circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v.1"/>"#,
             "wave" => r#"<path d="M2 10v4m4-8v12m4-16v20m4-17v14m4-11v8m4-6v4"/>"#,
             _ => return Ok(None),
         };

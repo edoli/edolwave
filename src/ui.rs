@@ -4,7 +4,7 @@ use gpui::{
     BorderStyle, Bounds, Context, Div, ExternalPaths, FocusHandle, FontWeight, IntoElement,
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, PathPromptOptions, Pixels, Render,
     ScrollWheelEvent, Stateful, Svg, Timer, Window, WindowControlArea, canvas, div, point,
-    prelude::*, px, quad, rgb, size, svg, transparent_black,
+    prelude::*, px, quad, rgb, rgba, size, svg, transparent_black,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -63,7 +63,7 @@ pub struct PlayerView {
     volume_preview: Option<f32>,
     speed_preview: Option<f32>,
     last_volume: f32,
-    settings: bool,
+    info_open: bool,
     started: Instant,
     first_render: bool,
 }
@@ -133,7 +133,7 @@ impl PlayerView {
             volume_preview: None,
             speed_preview: None,
             last_volume: 0.8,
-            settings: false,
+            info_open: false,
             started,
             first_render: true,
         };
@@ -300,7 +300,7 @@ impl PlayerView {
             .child(icon("chevron", 12., MUTED))
             .on_click(cx.listener(|this, _, _, cx| {
                 this.speed_menu_open = !this.speed_menu_open;
-                this.settings = false;
+                this.info_open = false;
                 cx.notify();
             }))
             .on_scroll_wheel(cx.listener(|this, event, _, cx| this.scroll_speed(event, cx)))
@@ -352,6 +352,82 @@ impl PlayerView {
                     cx.notify();
                 }
             }))
+    }
+
+    fn info_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let shortcuts = [
+            ("파일 열기", "Ctrl + O"),
+            ("재생 / 일시정지", "Space"),
+            ("5초 탐색", "← / →"),
+            ("처음으로", "Home"),
+            ("볼륨", "↑ / ↓"),
+            ("음소거 / 반복", "M / R"),
+            ("안내 닫기", "Esc"),
+        ];
+        let heading = |title| {
+            div()
+                .text_size(px(12.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(title)
+        };
+        div()
+            .id("info-overlay")
+            .absolute().top_0().left_0().size_full()
+            .occlude()
+            .bg(rgba(0x080d16df))
+            .p(px(12.))
+            .flex().items_center().justify_center()
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.info_open = false;
+                cx.notify();
+            }))
+            .child(
+                div().id("info-panel").occlude()
+                    .w_full().max_w(px(760.)).h_full().max_h(px(280.))
+                    .flex().flex_col()
+                    .rounded(px(10.)).bg(rgb(PANEL))
+                    .border_1().border_color(rgb(LINE)).shadow_lg()
+                    .on_click(|_, _, cx| cx.stop_propagation())
+                    .child(
+                        div().h(px(36.)).flex_shrink_0().px(px(12.))
+                            .flex().items_center().justify_between()
+                            .child(div().flex().items_center().gap(px(8.))
+                                .child(icon("info", 18., BLUE))
+                                .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child("EdolWave · 정보"))
+                                .child(div().text_size(px(10.)).text_color(rgb(MUTED)).child(env!("CARGO_PKG_VERSION"))))
+                            .child(tool("close-info", "close").on_click(cx.listener(|this, _, _, cx| {
+                                this.info_open = false;
+                                cx.notify();
+                            })))
+                    )
+                    .child(
+                        div().id("info-body").flex_1().min_h_0().overflow_y_scroll()
+                            .px(px(14.)).pb(px(12.))
+                            .child(
+                                div().flex().gap(px(14.))
+                                    .child(
+                                        div().flex_1().min_w_0().flex().flex_col()
+                                            .child(heading("단축키").mb(px(6.)))
+                                            .children(shortcuts.into_iter().map(|(label, key)| {
+                                                div().h(px(20.)).flex_shrink_0().flex().items_center().justify_between().gap(px(6.))
+                                                    .text_size(px(11.))
+                                                    .child(label)
+                                                    .child(div().flex_shrink_0().text_color(rgb(MUTED)).child(key))
+                                            }))
+                                    )
+                                    .child(div().w(px(1.)).flex_shrink_0().bg(rgb(LINE)))
+                                    .child(
+                                        div().flex_1().min_w_0().flex().flex_col().gap(px(8.))
+                                            .text_size(px(11.)).line_height(px(16.)).text_color(rgb(MUTED))
+                                            .child(heading("재생 안내").text_color(rgb(TEXT)))
+                                            .child("파형을 클릭하거나 드래그해 탐색합니다.")
+                                            .child("볼륨·배속 위에서 휠로 조절합니다. 배속은 0.5~2배이며 음높이도 바뀝니다.")
+                                            .child("여러 파일은 이전·다음 버튼으로 이동합니다.")
+                                            .child("Opus·WMA 등 추가 형식은 설치된 FFmpeg를 사용합니다.")
+                                    )
+                            )
+                    )
+            )
     }
 
     fn controls(&self, narrow: bool, cx: &mut Context<Self>) -> Div {
@@ -499,6 +575,13 @@ impl PlayerView {
 
     fn key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = e.keystroke.key.as_str();
+        if self.info_open {
+            if key == "escape" {
+                self.info_open = false;
+                cx.notify();
+            }
+            return;
+        }
         if e.keystroke.modifiers.control && key == "o" {
             self.choose(window, cx);
             return;
@@ -525,7 +608,7 @@ impl PlayerView {
             "r" => self.audio.send(Command::Repeat),
             "m" => self.mute(cx),
             "escape" => {
-                self.settings = false;
+                self.info_open = false;
                 self.speed_menu_open = false;
                 self.scrubbing = None;
                 cx.notify();
@@ -707,54 +790,159 @@ impl Render for PlayerView {
             })
             .unwrap_or_else(|| "NATIVE AUDIO PLAYER".into());
         let narrow = window.viewport_size().width < px(640.);
-        div().id("player").size_full().relative().flex().flex_col()
-            .bg(rgb(BG)).text_color(rgb(TEXT)).font_family("Segoe UI").text_size(px(14.))
+        div()
+            .id("player")
+            .size_full()
+            .relative()
+            .flex()
+            .flex_col()
+            .bg(rgb(BG))
+            .text_color(rgb(TEXT))
+            .font_family("Segoe UI")
+            .text_size(px(14.))
             .on_key_down(cx.listener(Self::key))
-            .on_drop(cx.listener(|this, files: &ExternalPaths, _, cx| this.open(files.paths().to_vec(), cx)))
+            .on_drop(cx.listener(|this, files: &ExternalPaths, _, cx| {
+                this.open(files.paths().to_vec(), cx)
+            }))
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| {
                 if !e.pressed_button.is_some_and(|b| b == MouseButton::Left) {
-                    if this.scrubbing.is_some() { this.finish_seek(cx); }
-                    this.volume_drag = false; return;
+                    if this.scrubbing.is_some() {
+                        this.finish_seek(cx);
+                    }
+                    this.volume_drag = false;
+                    return;
                 }
-                if this.scrubbing.is_some() { this.scrubbing = Some(this.fraction(e.position.x)); cx.notify(); }
-                if this.volume_drag { this.set_volume_at(e.position.x, cx); }
+                if this.scrubbing.is_some() {
+                    this.scrubbing = Some(this.fraction(e.position.x));
+                    cx.notify();
+                }
+                if this.volume_drag {
+                    this.set_volume_at(e.position.x, cx);
+                }
             }))
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| { this.finish_seek(cx); this.volume_drag = false; }))
-            .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, cx| { this.finish_seek(cx); this.volume_drag = false; }))
-            .child(div().flex().flex_shrink_0().items_center().h(px(44.)).px(px(16.)).gap(px(14.))
-                .child(div().id("title-drag").flex_1().min_w_0().h_full().flex().items_center().gap(px(14.)).cursor_default()
-                    .window_control_area(WindowControlArea::Drag)
-                    .child(icon("wave", 26., 0x49caff))
-                    .child(div().min_w_0().flex_1().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).text_ellipsis().child(name)))
-                .child(tool("open", "folder").on_click(cx.listener(|this, _, window, cx| this.choose(window, cx))))
-                .child(tool("settings", "settings").on_click(cx.listener(|this, _, _, cx| { this.settings = !this.settings; this.speed_menu_open = false; cx.notify(); })))
-                .child(div().w(px(1.)).h(px(20.)).bg(rgb(LINE)).mx_1())
-                .child(tool("minimize", "minimize").on_click(|_, w, _| w.minimize_window()))
-                .child(tool("maximize", "maximize").on_click(|_, w, _| w.zoom_window()))
-                .child(tool("close", "close").hover(|s| s.bg(rgb(0x663142))).on_click(|_, _, cx| cx.quit())))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.finish_seek(cx);
+                    this.volume_drag = false;
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.finish_seek(cx);
+                    this.volume_drag = false;
+                }),
+            )
             .child(
-                div().track_focus(&self.focus).flex_1().min_h_0().px(px(16.)).flex().flex_col()
+                div()
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .h(px(44.))
+                    .px(px(16.))
+                    .gap(px(14.))
+                    .child(
+                        div()
+                            .id("title-drag")
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .flex()
+                            .items_center()
+                            .gap(px(14.))
+                            .cursor_default()
+                            .window_control_area(WindowControlArea::Drag)
+                            .child(icon("wave", 26., 0x49caff))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .flex_1()
+                                    .text_size(px(16.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_ellipsis()
+                                    .child(name),
+                            ),
+                    )
+                    .child(
+                        tool("open", "folder")
+                            .on_click(cx.listener(|this, _, window, cx| this.choose(window, cx))),
+                    )
+                    .child(tool("info", "info").on_click(cx.listener(|this, _, _, cx| {
+                        this.info_open = !this.info_open;
+                        this.speed_menu_open = false;
+                        cx.notify();
+                    })))
+                    .child(div().w(px(1.)).h(px(20.)).bg(rgb(LINE)).mx_1())
+                    .child(tool("minimize", "minimize").on_click(|_, w, _| w.minimize_window()))
+                    .child(tool("maximize", "maximize").on_click(|_, w, _| w.zoom_window()))
+                    .child(
+                        tool("close", "close")
+                            .hover(|s| s.bg(rgb(0x663142)))
+                            .on_click(|_, _, cx| cx.quit()),
+                    ),
+            )
+            .child(
+                div()
+                    .track_focus(&self.focus)
+                    .flex_1()
+                    .min_h_0()
+                    .px(px(16.))
+                    .flex()
+                    .flex_col()
                     .child(self.waveform(cx))
                     .child(
-                        div().h(px(20.)).flex_shrink_0().flex().items_center().justify_between().gap(px(12.))
+                        div()
+                            .h(px(20.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap(px(12.))
                             .child(
-                                div().flex().flex_shrink_0().items_center().gap(px(8.)).text_size(px(12.)).line_height(px(16.)).font_weight(FontWeight::SEMIBOLD)
+                                div()
+                                    .flex()
+                                    .flex_shrink_0()
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .text_size(px(12.))
+                                    .line_height(px(16.))
+                                    .font_weight(FontWeight::SEMIBOLD)
                                     .child(div().text_color(rgb(BLUE)).child(time(pos)))
                                     .child(div().text_color(rgb(0x65758c)).child("/"))
-                                    .child(div().text_color(rgb(MUTED)).child(time(self.state.duration)))
+                                    .child(
+                                        div()
+                                            .text_color(rgb(MUTED))
+                                            .child(time(self.state.duration)),
+                                    ),
                             )
-                            .child(div().min_w_0().text_ellipsis().text_size(px(10.)).text_color(rgb(0x65758c)).child(metadata))
-                    )
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .text_ellipsis()
+                                    .text_size(px(10.))
+                                    .text_color(rgb(0x65758c))
+                                    .child(metadata),
+                            ),
+                    ),
             )
             .child(self.controls(narrow, cx))
-            .when_some(self.state.error.clone(), |el, error| el.child(div().h(px(24.)).flex_shrink_0().px(px(28.)).text_size(px(11.)).text_color(rgb(0xffa9a9)).text_ellipsis().child(error)))
-            .when(self.settings, |el| el.child(div().id("help-panel").absolute().top(px(48.)).right(px(20.)).w(px(306.)).max_h(px(260.)).overflow_y_scroll().rounded_lg().bg(rgb(0x202c3d)).border_1().border_color(rgb(0x3b4d65)).shadow_lg()
-                .child(div().p_5().flex().flex_col().gap_3()
-                .child(div().font_weight(FontWeight::SEMIBOLD).child("EdolWave · 빠른 사용 안내"))
-                .children([("파일 열기", "Ctrl + O"), ("재생 / 일시정지", "Space"), ("5초 탐색", "← / →"), ("처음으로", "Home"), ("볼륨", "↑ / ↓"), ("음소거 / 반복", "M / R")].into_iter().map(|(a,b)| div().flex().justify_between().text_size(px(12.)).child(a).child(div().text_color(rgb(MUTED)).child(b))))
-                .child(div().border_t_1().border_color(rgb(LINE)).pt_3().text_size(px(11.)).text_color(rgb(MUTED)).child("여러 파일을 함께 열면 이전/다음 버튼으로 이동합니다. 배속은 드롭다운에서 선택합니다. 볼륨과 배속 위에서 휠로 조절할 수 있습니다. 배속에 따라 음높이도 바뀝니다."))
-                .child(div().text_size(px(11.)).text_color(rgb(MUTED)).child("Opus · WMA · APE 등은 설치된 FFmpeg를 자동으로 사용합니다.")))))
-            .when(self.speed_menu_open, |el| el.child(self.speed_menu(window, cx)))
+            .when_some(self.state.error.clone(), |el, error| {
+                el.child(
+                    div()
+                        .h(px(24.))
+                        .flex_shrink_0()
+                        .px(px(28.))
+                        .text_size(px(11.))
+                        .text_color(rgb(0xffa9a9))
+                        .text_ellipsis()
+                        .child(error),
+                )
+            })
+            .when(self.speed_menu_open, |el| {
+                el.child(self.speed_menu(window, cx))
+            })
+            .when(self.info_open, |el| el.child(self.info_overlay(cx)))
     }
 }
 
