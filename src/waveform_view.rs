@@ -27,6 +27,13 @@ impl WaveformCache {
         progress: Option<f32>,
         window: &mut Window,
     ) {
+        let scale = window.scale_factor();
+        let snap = |value: Pixels| px((f32::from(value) * scale).round() / scale);
+        // Fractional quad edges can cover alternating numbers of device pixels
+        // as the playhead moves, making its thickness and brightness flicker.
+        // Share one snapped boundary with the played-waveform clipping mask.
+        let playhead_x =
+            progress.map(|fraction| snap(bounds.origin.x + bounds.size.width * fraction));
         let center = bounds.origin.y + bounds.size.height / 2.;
         window.paint_quad(fill(
             Bounds::new(
@@ -36,7 +43,6 @@ impl WaveformCache {
             rgb(0x26374d),
         ));
         if let Some(wave) = wave.filter(|w| !w.peaks.is_empty()) {
-            let scale = window.scale_factor();
             if self.geometry.as_ref().is_none_or(|g| {
                 !Arc::ptr_eq(&g.wave, wave) || g.bounds != bounds || g.scale != scale
             }) {
@@ -44,11 +50,9 @@ impl WaveformCache {
             }
             if let Some(g) = &self.geometry {
                 window.paint_path(g.fill.clone(), rgb(0x526d8e));
-                if let Some(fraction) = progress.filter(|f| *f > 0.) {
-                    let clip = Bounds::new(
-                        bounds.origin,
-                        size(bounds.size.width * fraction, bounds.size.height),
-                    );
+                if let Some(x) = playhead_x.filter(|x| *x > bounds.origin.x) {
+                    let clip =
+                        Bounds::new(bounds.origin, size(x - bounds.origin.x, bounds.size.height));
                     window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
                         window.paint_path(g.fill.clone(), rgb(0x388cff));
                     });
@@ -57,20 +61,26 @@ impl WaveformCache {
         } else {
             self.geometry = None;
         }
-        if let Some(fraction) = progress {
-            let x = bounds.origin.x + bounds.size.width * fraction;
-            let line_y = bounds.origin.y + px(8.);
-            let line_h = bounds.size.height - px(16.);
+        if let Some(x) = playhead_x {
+            let line_y = snap(bounds.origin.y + px(8.));
+            let line_h = snap(bounds.bottom() - px(8.)) - line_y;
+            let line_width = px((1.25 * scale).round().max(1.) / scale);
             window.paint_quad(fill(
-                Bounds::new(point(x - px(2.), line_y), size(px(5.), line_h)),
+                Bounds::new(point(x - snap(px(2.)), line_y), size(snap(px(5.)), line_h)),
                 rgba(0x6db9ff14),
             ));
             window.paint_quad(fill(
-                Bounds::new(point(x, line_y), size(px(1.25), line_h)),
+                Bounds::new(point(x, line_y), size(line_width, line_h)),
                 rgb(0x9fceff),
             ));
             window.paint_quad(quad(
-                Bounds::new(point(x - px(2.5), line_y - px(3.)), size(px(6.5), px(6.5))),
+                Bounds::new(
+                    point(
+                        x + line_width / 2. - snap(px(6.5)) / 2.,
+                        line_y - snap(px(3.)),
+                    ),
+                    size(snap(px(6.5)), snap(px(6.5))),
+                ),
                 px(3.25),
                 rgb(0x9fceff),
                 px(0.),
