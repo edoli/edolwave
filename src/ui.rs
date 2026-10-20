@@ -372,7 +372,14 @@ impl PlayerView {
 
     fn info_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let shortcuts = [
-            ("파일 열기", "Ctrl + O"),
+            (
+                "파일 열기",
+                if cfg!(target_os = "macos") {
+                    "Cmd + O"
+                } else {
+                    "Ctrl + O"
+                },
+            ),
             ("재생 / 일시정지", "Space"),
             ("5초 탐색", "← / →"),
             ("처음으로", "Home"),
@@ -598,11 +605,16 @@ impl PlayerView {
             }
             return;
         }
-        if e.keystroke.modifiers.control && key == "o" {
+        let command = if cfg!(target_os = "macos") {
+            e.keystroke.modifiers.platform
+        } else {
+            e.keystroke.modifiers.control
+        };
+        if command && key == "o" {
             self.choose(window, cx);
             return;
         }
-        if e.keystroke.modifiers.control && key == "q" {
+        if command && key == "q" {
             cx.quit();
             return;
         }
@@ -813,7 +825,7 @@ impl Render for PlayerView {
             .flex_col()
             .bg(rgb(BG))
             .text_color(rgb(TEXT))
-            .font_family("Segoe UI")
+            .font_family(".SystemUIFont")
             .text_size(px(14.))
             .on_key_down(cx.listener(Self::key))
             .on_drop(cx.listener(|this, files: &ExternalPaths, _, cx| {

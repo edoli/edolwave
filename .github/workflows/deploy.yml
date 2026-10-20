@@ -18,15 +18,28 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: 0
+  CARGO_BUILD_JOBS: 2
+  CARGO_PROFILE_DEV_DEBUG: 0
 
 jobs:
   build:
-    name: Windows x64 build and installer
-    runs-on: windows-latest
-    timeout-minutes: 60
-    defaults:
-      run:
-        shell: pwsh
+    name: ${{ matrix.label }} build and packages
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows x64
+            suffix: windows
+          - os: macos-15
+            label: macOS Apple Silicon
+            suffix: mac
+          - os: ubuntu-24.04
+            label: Linux x64
+            suffix: linux
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -36,7 +49,13 @@ jobs:
         with:
           components: rustfmt
 
+      - name: Install Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
       - name: Validate version metadata
+        shell: pwsh
         run: |
           if ($env:GITHUB_REF_TYPE -eq 'tag') {
             ./tools/version.ps1 -Tag $env:GITHUB_REF_NAME
@@ -45,25 +64,53 @@ jobs:
           }
 
       - name: Cache Cargo dependencies and builds
-        uses: actions/cache@v6
+        id: cargo-cache
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target/debug
             target/release-dist
-          key: windows-x64-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'build.rs', '.github/workflows/deploy.yml') }}
-          restore-keys: windows-x64-cargo-
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'build.rs', '.github/workflows/deploy.yml') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
 
       - name: Locate Windows SDK shader compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: |
           $fxc = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\fxc.exe" |
             Sort-Object FullName -Descending | Select-Object -First 1
           if (-not $fxc) { throw 'Windows SDK fxc.exe was not found.' }
           "GPUI_FXC_PATH=$($fxc.FullName)" >> $env:GITHUB_ENV
 
+      - name: Prepare macOS Metal compiler
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! xcrun -sdk macosx metal --version; then
+            xcodebuild -downloadComponent MetalToolchain
+            xcrun -sdk macosx metal --version
+          fi
+          echo 'MACOSX_DEPLOYMENT_TARGET=12.0' >> "$GITHUB_ENV"
+
+      - name: Install Linux build and packaging dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang cmake pkg-config libasound2-dev \
+            libfontconfig1-dev libfreetype6-dev libwayland-dev libx11-xcb-dev \
+            libxkbcommon-x11-dev libvulkan1 libssl-dev \
+            desktop-file-utils dpkg-dev patchelf squashfs-tools file unzip \
+            xvfb xauth xdotool dbus-x11 mesa-vulkan-drivers fonts-noto-cjk
+
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
+
+      - name: Check packaging scripts
+        run: python -m py_compile tools/package-unix.py tools/test-packages.py
 
       - name: Run tests
         run: cargo test --locked
@@ -72,24 +119,54 @@ jobs:
         run: cargo build --profile release-dist --locked
 
       - name: Install Inno Setup
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: ./tools/install_inno.ps1
 
-      - name: Build installer, portable ZIP and checksums
-        run: ./tools/package.ps1 -NoBuild
+      - name: Build Windows installer and portable ZIP
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./tools/package.ps1 -NoBuild
+          Move-Item -LiteralPath target/dist/SHA256SUMS.txt -Destination target/dist/SHA256SUMS-windows.txt
 
-      - name: Test installation, file associations and uninstall
+      - name: Test Windows installation, file associations and uninstall
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: ./tools/test-installer.ps1
 
-      - name: Upload Windows packages
+      - name: Build macOS or Linux packages
+        if: runner.os != 'Windows'
+        run: python tools/package-unix.py --no-build
+
+      - name: Test macOS app ZIP and DMG
+        if: runner.os == 'macOS'
+        run: python tools/test-packages.py
+
+      - name: Test Linux ZIP, AppImage, DEB and startup
+        if: runner.os == 'Linux'
+        run: xvfb-run -a dbus-run-session -- python tools/test-packages.py
+
+      - name: Upload packages
         uses: actions/upload-artifact@v7
         with:
-          name: edolwave-windows
+          name: edolwave-${{ matrix.suffix }}
           path: |
-            target/dist/edolwave-installer-exe.exe
-            target/dist/edolwave-windows.zip
-            target/dist/SHA256SUMS.txt
+            target/dist/edolwave*
+            target/dist/SHA256SUMS-${{ matrix.suffix }}.txt
           if-no-files-found: error
           compression-level: 0
+
+      - name: Save Cargo build cache
+        if: always() && !cancelled() && steps.cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/debug
+            target/release-dist
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   release:
     name: Publish GitHub Release
@@ -100,22 +177,34 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download Windows packages
+      - name: Download all platform packages
         uses: actions/download-artifact@v8
         with:
-          name: edolwave-windows
+          pattern: edolwave-*
+          merge-multiple: true
           path: dist
 
-      - name: Verify package checksums
+      - name: Verify and consolidate package checksums
         working-directory: dist
-        run: sha256sum --check SHA256SUMS.txt
+        run: |
+          set -euo pipefail
+          for platform in windows mac linux; do
+            sha256sum --check "SHA256SUMS-$platform.txt"
+          done
+          cat SHA256SUMS-windows.txt SHA256SUMS-mac.txt SHA256SUMS-linux.txt > SHA256SUMS.txt
+          test "$(wc -l < SHA256SUMS.txt)" -eq 7
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           files: |
-            dist/edolwave-installer-exe.exe
             dist/edolwave-windows.zip
+            dist/edolwave-installer-exe.exe
+            dist/edolwave-mac.zip
+            dist/edolwave-installer-dmg.dmg
+            dist/edolwave-linux.zip
+            dist/edolwave-installer-appimage.AppImage
+            dist/edolwave-installer-deb.deb
             dist/SHA256SUMS.txt
           fail_on_unmatched_files: true
           generate_release_notes: true

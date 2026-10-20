@@ -4,17 +4,15 @@ Rust + GPUI로 만든 Windows 네이티브 오디오 플레이어입니다. 파�
 
 ## 실행 및 빌드
 
-빌드 환경: Windows 10/11, Rust 1.96 이상, Visual Studio C++ Build Tools, Windows SDK.
+공통: Rust 1.96 이상.
+
+- Windows: Visual Studio C++ Build Tools, Windows SDK.
+- macOS: Xcode와 Metal 컴파일러. 필요하면 `xcodebuild -downloadComponent MetalToolchain`으로 설치합니다.
+- Linux: C/C++ 컴파일러, Clang, CMake, pkg-config, ALSA·Fontconfig·FreeType·Wayland·X11/XKB 개발 라이브러리와 Vulkan 로더가 필요합니다.
 
 ```powershell
-# 개발용 실행 (파일 경로는 선택)
+# 실행 예제
 cargo run --release -- "D:\Audio\confirm.wav"
-
-# 빠른 반복 빌드
-cargo build --release
-
-# 배포용 최적화 빌드
-cargo build --profile release-dist
 ```
 
 실행 파일: `target/release/edolwave.exe` 또는 `target/release-dist/edolwave.exe`.
