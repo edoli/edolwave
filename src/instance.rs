@@ -25,7 +25,7 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct Instance {
     // Drop the listener and join its thread before releasing the process lock.
-    _lock: File,
+    _lock: Option<File>,
     shutdown: Option<oneshot::Sender<()>>,
     worker: Option<JoinHandle<()>>,
     #[cfg(target_os = "macos")]
@@ -62,7 +62,7 @@ impl Instance {
     }
 
     /// None means the existing process accepted this launch; no UI should be created.
-    pub fn acquire(files: &[PathBuf]) -> Result<Option<Primary>> {
+    pub fn acquire(files: &[PathBuf], single_instance: bool) -> Result<Option<Primary>> {
         let mut directory = dirs::cache_dir()
             .context("사용자 캐시 폴더를 찾을 수 없습니다")?
             .join("EdolWave")
@@ -71,10 +71,14 @@ impl Instance {
         if let Some(scope) = std::env::var_os("EDOLWAVE_INSTANCE_SCOPE") {
             directory.push(format!("test-{:016x}", hash(scope)));
         }
-        Self::acquire_in(&directory, files)
+        Self::acquire_in(&directory, files, single_instance)
     }
 
-    fn acquire_in(directory: &Path, files: &[PathBuf]) -> Result<Option<Primary>> {
+    fn acquire_in(
+        directory: &Path,
+        files: &[PathBuf],
+        single_instance: bool,
+    ) -> Result<Option<Primary>> {
         let mut builder = fs::DirBuilder::new();
         builder.recursive(true);
         #[cfg(unix)]
@@ -104,6 +108,19 @@ impl Instance {
         loop {
             match lock.try_lock() {
                 Ok(()) => return Self::listen(lock, runtime, name).map(Some),
+                Err(TryLockError::WouldBlock) if !single_instance => {
+                    let (_sender, receiver) = async_channel::bounded(64);
+                    return Ok(Some((
+                        Self {
+                            _lock: None,
+                            shutdown: None,
+                            worker: None,
+                            #[cfg(target_os = "macos")]
+                            requests: _sender,
+                        },
+                        receiver,
+                    )));
+                }
                 Err(TryLockError::WouldBlock) => {}
                 Err(TryLockError::Error(error)) => return Err(error.into()),
             }
@@ -158,7 +175,7 @@ impl Instance {
             })?;
         Ok((
             Self {
-                _lock: lock,
+                _lock: Some(lock),
                 shutdown: Some(shutdown),
                 worker: Some(worker),
                 #[cfg(target_os = "macos")]
@@ -245,13 +262,15 @@ mod tests {
     #[test]
     fn forwards_unicode_relative_paths_and_empty_activation() {
         let directory = Directory::new();
-        let (_primary, requests) = Instance::acquire_in(&directory.0, &[]).unwrap().unwrap();
+        let (_primary, requests) = Instance::acquire_in(&directory.0, &[], true)
+            .unwrap()
+            .unwrap();
         let files = vec![
             PathBuf::from("한글 음악/first song.wav"),
             PathBuf::from("next.flac"),
         ];
         assert!(
-            Instance::acquire_in(&directory.0, &files)
+            Instance::acquire_in(&directory.0, &files, true)
                 .unwrap()
                 .is_none()
         );
@@ -263,16 +282,43 @@ mod tests {
                 .collect::<std::io::Result<Vec<_>>>()
                 .unwrap()
         );
-        assert!(Instance::acquire_in(&directory.0, &[]).unwrap().is_none());
+        assert!(
+            Instance::acquire_in(&directory.0, &[], true)
+                .unwrap()
+                .is_none()
+        );
+        assert!(requests.recv_blocking().unwrap().is_empty());
+    }
+
+    #[test]
+    fn disabled_launches_keep_separate_windows_and_can_be_enabled_again() {
+        let directory = Directory::new();
+        let (_primary, requests) = Instance::acquire_in(&directory.0, &[], false)
+            .unwrap()
+            .unwrap();
+        let (_independent, _) =
+            Instance::acquire_in(&directory.0, &[PathBuf::from("independent.wav")], false)
+                .unwrap()
+                .unwrap();
+        assert!(requests.try_recv().is_err());
+        assert!(
+            Instance::acquire_in(&directory.0, &[], true)
+                .unwrap()
+                .is_none()
+        );
         assert!(requests.recv_blocking().unwrap().is_empty());
     }
 
     #[test]
     fn releases_lock_and_socket_after_exit() {
         let directory = Directory::new();
-        let (primary, _) = Instance::acquire_in(&directory.0, &[]).unwrap().unwrap();
+        let (primary, _) = Instance::acquire_in(&directory.0, &[], true)
+            .unwrap()
+            .unwrap();
         drop(primary);
-        let (_replacement, _) = Instance::acquire_in(&directory.0, &[]).unwrap().unwrap();
+        let (_replacement, _) = Instance::acquire_in(&directory.0, &[], true)
+            .unwrap()
+            .unwrap();
         assert!(!directory.0.join("endpoint.json").exists());
     }
 
@@ -286,8 +332,12 @@ mod tests {
                 let barrier = barrier.clone();
                 thread::spawn(move || {
                     barrier.wait();
-                    Instance::acquire_in(&path, &[PathBuf::from(format!("track-{index}.wav"))])
-                        .unwrap()
+                    Instance::acquire_in(
+                        &path,
+                        &[PathBuf::from(format!("track-{index}.wav"))],
+                        true,
+                    )
+                    .unwrap()
                 })
             })
             .collect::<Vec<_>>();
@@ -303,7 +353,9 @@ mod tests {
     #[test]
     fn stalled_and_invalid_clients_do_not_break_handoff_or_shutdown() {
         let directory = Directory::new();
-        let (primary, requests) = Instance::acquire_in(&directory.0, &[]).unwrap().unwrap();
+        let (primary, requests) = Instance::acquire_in(&directory.0, &[], true)
+            .unwrap()
+            .unwrap();
         let name = socket_name(&directory.0.canonicalize().unwrap()).unwrap();
         let runtime = Builder::new_current_thread().enable_all().build().unwrap();
         runtime.block_on(async {

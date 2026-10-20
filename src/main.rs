@@ -3,6 +3,7 @@
 mod assets;
 mod audio;
 mod instance;
+mod settings;
 mod ui;
 mod update;
 mod waveform;
@@ -17,7 +18,11 @@ use std::{path::PathBuf, time::Instant};
 fn main() -> anyhow::Result<()> {
     let started = Instant::now();
     let files: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
-    let Some((_instance, requests)) = instance::Instance::acquire(&files)? else {
+    let settings_store = settings::Store::new()?;
+    let settings = settings_store.load();
+    let Some((_instance, requests)) =
+        instance::Instance::acquire(&files, settings.single_instance)?
+    else {
         return Ok(());
     };
     let application = Application::new().with_assets(assets::Icons);
@@ -57,7 +62,11 @@ fn main() -> anyhow::Result<()> {
                     app_id: Some("dev.edoli.edolwave".into()),
                     ..Default::default()
                 },
-                move |window, cx| cx.new(|cx| ui::PlayerView::new(files, started, window, cx)),
+                move |window, cx| {
+                    cx.new(|cx| {
+                        ui::PlayerView::new(files, settings_store, settings, started, window, cx)
+                    })
+                },
             )
             .expect("플레이어 창을 열 수 없습니다");
         cx.spawn(async move |cx| {

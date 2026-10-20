@@ -1,4 +1,5 @@
 use crate::audio::{Audio, Command, Snapshot};
+use crate::settings::{Settings, Store};
 use crate::update::{self, CheckState, InstallState};
 use crate::waveform_view::WaveformCache;
 use gpui::{
@@ -67,6 +68,9 @@ pub struct PlayerView {
     last_volume: f32,
     info_open: bool,
     settings_open: bool,
+    settings_store: Store,
+    preferences: Settings,
+    settings_error: Option<String>,
     update_service: update::Service,
     update_events: async_channel::Sender<update::Event>,
     update_check: CheckState,
@@ -78,12 +82,26 @@ pub struct PlayerView {
 impl PlayerView {
     pub fn new(
         files: Vec<PathBuf>,
+        settings_store: Store,
+        preferences: Settings,
         started: Instant,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let audio = Audio::new();
-        let state = audio.snapshot();
+        // Queue preferences before any file is loaded, so playback starts with
+        // the saved values even while the audio worker is still starting.
+        audio.send(Command::Volume(preferences.volume));
+        audio.send(Command::Speed(preferences.speed));
+        if preferences.repeat {
+            audio.send(Command::Repeat);
+        }
+        let state = Snapshot {
+            volume: preferences.volume,
+            speed: preferences.speed,
+            repeat: preferences.repeat,
+            ..audio.snapshot()
+        };
         let focus = cx.focus_handle();
         window.focus(&focus);
         let (update_events, receiver) = async_channel::bounded(32);
@@ -180,9 +198,16 @@ impl PlayerView {
             volume_preview: None,
             volume_feedback_until: None,
             speed_preview: None,
-            last_volume: 0.8,
+            last_volume: if preferences.volume > 0. {
+                preferences.volume
+            } else {
+                0.8
+            },
             info_open: false,
             settings_open: false,
+            settings_store,
+            preferences,
+            settings_error: None,
             update_service: update::Service::new(),
             update_events,
             update_check: CheckState::Checking,
@@ -350,11 +375,17 @@ impl PlayerView {
         self.volume_preview = Some(volume);
         self.volume_feedback_until = Some(Instant::now() + Duration::from_millis(1200));
         self.audio.send(Command::Volume(volume));
+        self.preferences.volume = volume;
+        if !self.volume_drag {
+            self.persist(|settings| settings.volume = volume);
+        }
         cx.notify();
     }
 
     fn finish_volume_drag(&mut self, cx: &mut Context<Self>) {
         if std::mem::take(&mut self.volume_drag) {
+            let volume = self.preferences.volume;
+            self.persist(|settings| settings.volume = volume);
             self.volume_feedback_until = Some(Instant::now() + Duration::from_millis(1200));
             cx.notify();
         }
@@ -371,8 +402,25 @@ impl PlayerView {
         if speed != self.speed_preview.unwrap_or(self.state.speed) {
             self.speed_preview = Some(speed);
             self.audio.send(Command::Speed(speed));
+            self.preferences.speed = speed;
+            self.persist(|settings| settings.speed = speed);
             cx.notify();
         }
+    }
+
+    fn persist(&mut self, change: impl FnOnce(&mut Settings)) {
+        self.settings_error = self.settings_store.update(change).err().map(|error| {
+            eprintln!("설정을 저장하지 못했습니다: {error:#}");
+            "설정을 저장하지 못했습니다. 설정 폴더의 접근 권한을 확인해 주세요.".into()
+        });
+    }
+
+    fn toggle_repeat(&mut self, cx: &mut Context<Self>) {
+        self.preferences.repeat = !self.preferences.repeat;
+        let repeat = self.preferences.repeat;
+        self.audio.send(Command::Repeat);
+        self.persist(|settings| settings.repeat = repeat);
+        cx.notify();
     }
 
     fn scroll_speed(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
@@ -596,7 +644,62 @@ impl PlayerView {
                             .tooltip(move |_, cx| cx.new(|_| TextTooltip(hint.clone())).into())
                             .child(action),
                     ),
-            );
+            )
+            .child(
+                div()
+                    .id("single-instance-row")
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(12.))
+                    .py(px(8.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(div().text_size(px(12.)).child("싱글 인스턴스"))
+                            .child(
+                                div()
+                                    .mt(px(4.))
+                                    .text_size(px(11.))
+                                    .text_color(rgb(MUTED))
+                                    .child("새로 실행할 때 기존 창에서 파일을 재생합니다."),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("single-instance-toggle")
+                            .w(px(36.))
+                            .h(px(22.))
+                            .flex_shrink_0()
+                            .rounded_full()
+                            .bg(rgb(if self.preferences.single_instance {
+                                BLUE
+                            } else {
+                                LINE
+                            }))
+                            .p(px(3.))
+                            .flex()
+                            .when(self.preferences.single_instance, |el| el.justify_end())
+                            .cursor_pointer()
+                            .child(div().size(px(16.)).rounded_full().bg(rgb(TEXT)))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.preferences.single_instance =
+                                    !this.preferences.single_instance;
+                                let enabled = this.preferences.single_instance;
+                                this.persist(|settings| settings.single_instance = enabled);
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .when_some(self.settings_error.clone(), |el, error| {
+                el.child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(rgb(0xffb580))
+                        .child(error),
+                )
+            });
         div()
             .id("settings-overlay")
             .absolute()
@@ -834,12 +937,12 @@ impl PlayerView {
             .px_2()
             .py_1()
             .rounded_md()
-            .when(narrow && self.state.repeat, |el| el.bg(rgb(0x203d60)))
+            .when(narrow && self.preferences.repeat, |el| el.bg(rgb(0x203d60)))
             .hover(|s| s.bg(rgb(PANEL)))
             .child(icon(
                 "repeat",
                 20.,
-                if self.state.repeat { BLUE } else { MUTED },
+                if self.preferences.repeat { BLUE } else { MUTED },
             ))
             .when(!narrow, |el| {
                 el.child(
@@ -853,22 +956,22 @@ impl PlayerView {
                         .w(px(32.))
                         .h(px(19.))
                         .rounded_full()
-                        .bg(rgb(if self.state.repeat { BLUE } else { LINE }))
+                        .bg(rgb(if self.preferences.repeat { BLUE } else { LINE }))
                         .p(px(3.))
                         .flex()
-                        .when(self.state.repeat, |d| d.justify_end())
+                        .when(self.preferences.repeat, |d| d.justify_end())
                         .child(div().size(px(13.)).rounded_full().bg(rgb(TEXT))),
                 )
             })
             .tooltip({
-                let label = if self.state.repeat {
+                let label = if self.preferences.repeat {
                     "반복 재생 켜짐"
                 } else {
                     "반복 재생 꺼짐"
                 };
                 move |_, cx| cx.new(|_| TextTooltip(label.into())).into()
             })
-            .on_click(cx.listener(|this, _, _, _| this.audio.send(Command::Repeat)));
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_repeat(cx)));
         div()
             .h(px(48.))
             .flex_shrink_0()
@@ -921,7 +1024,7 @@ impl PlayerView {
             "home" => self.seek_to(Duration::ZERO, cx),
             "up" => self.set_volume(self.displayed_volume() + 0.05, cx),
             "down" => self.set_volume(self.displayed_volume() - 0.05, cx),
-            "r" => self.audio.send(Command::Repeat),
+            "r" => self.toggle_repeat(cx),
             "m" => self.mute(cx),
             "escape" => {
                 self.info_open = false;
