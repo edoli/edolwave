@@ -556,7 +556,6 @@ impl PlayerView {
                     .flex_shrink_0()
                     .flex()
                     .items_center()
-                    .justify_between()
                     .gap(px(12.))
                     .child(
                         div()
