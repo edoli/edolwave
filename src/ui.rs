@@ -1,4 +1,5 @@
 use crate::audio::{Audio, Command, Snapshot};
+use crate::update::{self, CheckState, InstallState};
 use crate::waveform_view::WaveformCache;
 use gpui::{
     BorderStyle, Bounds, Context, Div, ExternalPaths, FocusHandle, FontWeight, IntoElement,
@@ -64,6 +65,11 @@ pub struct PlayerView {
     speed_preview: Option<f32>,
     last_volume: f32,
     info_open: bool,
+    settings_open: bool,
+    update_service: update::Service,
+    update_events: async_channel::Sender<update::Event>,
+    update_check: CheckState,
+    update_install: InstallState,
     started: Instant,
     first_render: bool,
 }
@@ -79,6 +85,38 @@ impl PlayerView {
         let state = audio.snapshot();
         let focus = cx.focus_handle();
         window.focus(&focus);
+        let (update_events, receiver) = async_channel::bounded(32);
+        cx.spawn(async move |this, cx| {
+            while let Ok(event) = receiver.recv().await {
+                if this
+                    .update(cx, |this, cx| {
+                        match event {
+                            update::Event::Checked(result) => {
+                                this.update_check = match result {
+                                    Ok(Some(release)) => CheckState::Available(release),
+                                    Ok(None) => CheckState::Current,
+                                    Err(error) => CheckState::Failed(error),
+                                };
+                            }
+                            update::Event::Progress { received, total } => {
+                                this.update_install = InstallState::Downloading { received, total };
+                            }
+                            update::Event::Downloaded(result) => {
+                                this.update_install = match result {
+                                    Ok(package) => InstallState::Ready(package),
+                                    Err(error) => InstallState::Failed(error),
+                                };
+                            }
+                        }
+                        cx.notify();
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
         cx.spawn(async move |this, cx| {
             loop {
                 Timer::after(Duration::from_millis(33)).await;
@@ -134,13 +172,66 @@ impl PlayerView {
             speed_preview: None,
             last_volume: 0.8,
             info_open: false,
+            settings_open: false,
+            update_service: update::Service::new(),
+            update_events,
+            update_check: CheckState::Checking,
+            update_install: InstallState::Idle,
             started,
             first_render: true,
         };
         if !files.is_empty() {
             view.open(files, cx);
         }
+        view.update_service
+            .check_in_background(view.update_events.clone());
         view
+    }
+
+    fn check_updates(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.update_check, CheckState::Checking)
+            || matches!(self.update_install, InstallState::Downloading { .. })
+        {
+            return;
+        }
+        self.update_install = InstallState::Idle;
+        self.update_check = CheckState::Checking;
+        self.update_service
+            .check_in_background(self.update_events.clone());
+        cx.notify();
+    }
+
+    fn download_update(&mut self, cx: &mut Context<Self>) {
+        let CheckState::Available(release) = &self.update_check else {
+            return;
+        };
+        if !matches!(
+            self.update_install,
+            InstallState::Idle | InstallState::Failed(_)
+        ) {
+            return;
+        }
+        self.update_install = InstallState::Downloading {
+            received: 0,
+            total: 0,
+        };
+        self.update_service
+            .download_in_background(release.clone(), self.update_events.clone());
+        cx.notify();
+    }
+
+    fn install_update(&mut self, cx: &mut Context<Self>) {
+        let state = std::mem::replace(&mut self.update_install, InstallState::Idle);
+        let InstallState::Ready(package) = state else {
+            self.update_install = state;
+            return;
+        };
+        match package.launch() {
+            Ok(true) => cx.quit(),
+            Ok(false) => self.update_install = InstallState::Opened,
+            Err(error) => self.update_install = InstallState::Failed(error.to_string()),
+        }
+        cx.notify();
     }
 
     fn open(&mut self, files: Vec<PathBuf>, cx: &mut Context<Self>) {
@@ -167,6 +258,7 @@ impl PlayerView {
             self.open(files, cx);
         }
         self.info_open = false;
+        self.settings_open = false;
         self.speed_menu_open = false;
         window.focus(&self.focus);
         window.activate_window();
@@ -317,6 +409,7 @@ impl PlayerView {
             .on_click(cx.listener(|this, _, _, cx| {
                 this.speed_menu_open = !this.speed_menu_open;
                 this.info_open = false;
+                this.settings_open = false;
                 cx.notify();
             }))
             .on_scroll_wheel(cx.listener(|this, event, _, cx| this.scroll_speed(event, cx)))
@@ -368,6 +461,232 @@ impl PlayerView {
                     cx.notify();
                 }
             }))
+    }
+
+    fn settings_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let (status, detail, color) = match &self.update_check {
+            CheckState::Checking => (
+                "업데이트 확인 중…",
+                "최신 버전 정보를 가져오고 있습니다.".to_owned(),
+                MUTED,
+            ),
+            CheckState::Current => (
+                "최신 버전입니다",
+                "현재 최신 버전을 사용하고 있습니다.".to_owned(),
+                0x65d6ac,
+            ),
+            CheckState::Available(release) => (
+                "새 업데이트가 있습니다",
+                format!("최신 버전 {}", release.version),
+                BLUE,
+            ),
+            CheckState::Failed(error) => {
+                ("업데이트를 확인하지 못했습니다", error.clone(), 0xffb580)
+            }
+        };
+        let busy = matches!(self.update_check, CheckState::Checking)
+            || matches!(self.update_install, InstallState::Downloading { .. });
+        let mut body = div()
+            .id("settings-body")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .px(px(14.))
+            .py(px(8.))
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(rgb(MUTED))
+                    .child(format!(
+                        "소프트웨어 업데이트 · 현재 버전 {}",
+                        env!("CARGO_PKG_VERSION")
+                    )),
+            )
+            .child(
+                div()
+                    .text_size(px(14.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(color))
+                    .child(status),
+            )
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .line_height(px(17.))
+                    .text_color(rgb(MUTED))
+                    .child(detail),
+            );
+        match &self.update_install {
+            InstallState::Downloading { received, total } => {
+                let fraction = if *total == 0 {
+                    0.
+                } else {
+                    *received as f32 / *total as f32
+                };
+                body = body
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .h(px(4.))
+                            .w_full()
+                            .rounded_full()
+                            .bg(rgb(LINE))
+                            .child(
+                                div()
+                                    .h_full()
+                                    .w(gpui::relative(fraction))
+                                    .rounded_full()
+                                    .bg(rgb(BLUE)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(rgb(MUTED))
+                            .child(format!("다운로드 중 · {:.0}%", fraction * 100.)),
+                    );
+            }
+            InstallState::Ready(_) => {
+                body = body.child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(rgb(0x65d6ac))
+                        .child("다운로드 및 파일 검증 완료"),
+                );
+            }
+            InstallState::Failed(error) => {
+                body = body.child(
+                    div()
+                        .text_size(px(11.))
+                        .line_height(px(17.))
+                        .text_color(rgb(0xffb580))
+                        .child(error.clone()),
+                );
+            }
+            InstallState::Opened => {
+                body = body.child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(rgb(0x65d6ac))
+                        .child("설치 파일을 열었습니다."),
+                );
+            }
+            InstallState::Idle => {}
+        }
+        if matches!(self.update_check, CheckState::Available(_)) {
+            body = body.child(
+                div()
+                    .text_size(px(11.))
+                    .line_height(px(17.))
+                    .text_color(rgb(MUTED))
+                    .child(update::install_hint()),
+            );
+        }
+        let mut footer = div()
+            .h(px(42.))
+            .flex_shrink_0()
+            .px(px(14.))
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(8.))
+            .border_t_1()
+            .border_color(rgb(LINE))
+            .child(
+                settings_button("check-updates", "다시 확인", false, !busy)
+                    .on_click(cx.listener(|this, _, _, cx| this.check_updates(cx))),
+            );
+        if matches!(self.update_check, CheckState::Available(_)) {
+            let ready = matches!(self.update_install, InstallState::Ready(_));
+            let label = match &self.update_install {
+                InstallState::Downloading { .. } => "다운로드 중…",
+                InstallState::Ready(_) if cfg!(windows) => "설치하고 종료",
+                InstallState::Ready(_) => "설치 파일 열기",
+                InstallState::Failed(_) => "다시 다운로드",
+                InstallState::Opened => "다시 다운로드",
+                InstallState::Idle => "업데이트 다운로드",
+            };
+            footer = footer.child(
+                settings_button("install-update", label, true, !busy).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        if ready {
+                            this.install_update(cx);
+                        } else {
+                            if matches!(this.update_install, InstallState::Opened) {
+                                this.update_install = InstallState::Idle;
+                            }
+                            this.download_update(cx);
+                        }
+                    },
+                )),
+            );
+        }
+        div()
+            .id("settings-overlay")
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .occlude()
+            .bg(rgba(0x080d16df))
+            .p(px(12.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.settings_open = false;
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .id("settings-panel")
+                    .occlude()
+                    .w_full()
+                    .max_w(px(480.))
+                    .h_full()
+                    .max_h(px(320.))
+                    .flex()
+                    .flex_col()
+                    .rounded(px(10.))
+                    .bg(rgb(PANEL))
+                    .border_1()
+                    .border_color(rgb(LINE))
+                    .shadow_lg()
+                    .on_click(|_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .h(px(36.))
+                            .flex_shrink_0()
+                            .px(px(12.))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .child(icon("settings", 18., BLUE))
+                                    .child(
+                                        div()
+                                            .text_size(px(13.))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child("EdolWave · 설정"),
+                                    ),
+                            )
+                            .child(tool("close-settings", "close").on_click(cx.listener(
+                                |this, _, _, cx| {
+                                    this.settings_open = false;
+                                    cx.notify();
+                                },
+                            ))),
+                    )
+                    .child(body)
+                    .child(footer),
+            )
     }
 
     fn info_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -598,9 +917,10 @@ impl PlayerView {
 
     fn key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = e.keystroke.key.as_str();
-        if self.info_open {
+        if self.info_open || self.settings_open {
             if key == "escape" {
                 self.info_open = false;
+                self.settings_open = false;
                 cx.notify();
             }
             return;
@@ -897,9 +1217,44 @@ impl Render for PlayerView {
                     )
                     .child(tool("info", "info").on_click(cx.listener(|this, _, _, cx| {
                         this.info_open = !this.info_open;
+                        this.settings_open = false;
                         this.speed_menu_open = false;
                         cx.notify();
                     })))
+                    .child(
+                        tool("settings", "settings")
+                            .relative()
+                            .when(
+                                matches!(self.update_check, CheckState::Available(_)),
+                                |el| {
+                                    el.child(
+                                        div()
+                                            .absolute()
+                                            .top(px(2.))
+                                            .right(px(2.))
+                                            .size(px(8.))
+                                            .rounded_full()
+                                            .bg(rgb(BLUE))
+                                            .border_1()
+                                            .border_color(rgb(BG)),
+                                    )
+                                },
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.settings_open = !this.settings_open;
+                                this.info_open = false;
+                                this.speed_menu_open = false;
+                                if this.settings_open
+                                    && matches!(
+                                        this.update_check,
+                                        CheckState::Current | CheckState::Failed(_)
+                                    )
+                                {
+                                    this.check_updates(cx);
+                                }
+                                cx.notify();
+                            })),
+                    )
                     .child(div().w(px(1.)).h(px(20.)).bg(rgb(LINE)).mx_1())
                     .child(tool("minimize", "minimize").on_click(|_, w, _| w.minimize_window()))
                     .child(tool("maximize", "maximize").on_click(|_, w, _| w.zoom_window()))
@@ -970,6 +1325,7 @@ impl Render for PlayerView {
                 el.child(self.speed_menu(window, cx))
             })
             .when(self.info_open, |el| el.child(self.info_overlay(cx)))
+            .when(self.settings_open, |el| el.child(self.settings_overlay(cx)))
     }
 }
 
@@ -987,6 +1343,32 @@ fn tool(id: &'static str, name: &'static str) -> Stateful<Div> {
         .cursor_pointer()
         .hover(|s| s.bg(rgb(0x263345)))
         .child(icon(name, 19., MUTED))
+}
+fn settings_button(
+    id: &'static str,
+    label: &'static str,
+    primary: bool,
+    enabled: bool,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .h(px(28.))
+        .px(px(10.))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(5.))
+        .border_1()
+        .border_color(rgb(if primary { BLUE } else { LINE }))
+        .bg(rgb(if primary { BLUE } else { PANEL }))
+        .text_size(px(11.))
+        .when(enabled, |el| {
+            el.cursor_pointer()
+                .hover(move |el| el.bg(rgb(if primary { 0x55a0ff } else { 0x26364b })))
+        })
+        .when(!enabled, |el| el.opacity(0.5))
+        .child(label)
 }
 fn transport(id: &'static str, name: &'static str, primary: bool) -> Stateful<Div> {
     div()

@@ -31,6 +31,9 @@ impl AssetSource for Icons {
             "minimize" => r#"<path d="M5 12h14"/>"#,
             "maximize" => r#"<rect x="5" y="5" width="14" height="14" rx="1"/>"#,
             "info" => r#"<circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v.1"/>"#,
+            "settings" => {
+                r#"<path d="m9.5 3-.5 2-1.6.9-2-.6-2.5 4.4 1.5 1.4v1.8l-1.5 1.4 2.5 4.4 2-.6 1.6.9.5 2h5l.5-2 1.6-.9 2 .6 2.5-4.4-1.5-1.4v-1.8l1.5-1.4-2.5-4.4-2 .6L15 5l-.5-2Z"/><circle cx="12" cy="12" r="3"/>"#
+            }
             "wave" => r#"<path d="M2 10v4m4-8v12m4-16v20m4-17v14m4-11v8m4-6v4"/>"#,
             _ => return Ok(None),
         };

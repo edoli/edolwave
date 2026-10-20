@@ -4,6 +4,7 @@ mod assets;
 mod audio;
 mod instance;
 mod ui;
+mod update;
 mod waveform;
 mod waveform_view;
 
