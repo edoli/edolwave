@@ -591,14 +591,10 @@ impl PlayerView {
             .px(px(14.))
             .flex()
             .items_center()
-            .justify_between()
+            .justify_end()
             .gap(px(8.))
             .border_t_1()
-            .border_color(rgb(LINE))
-            .child(
-                settings_button("check-updates", "다시 확인", false, !busy)
-                    .on_click(cx.listener(|this, _, _, cx| this.check_updates(cx))),
-            );
+            .border_color(rgb(LINE));
         if matches!(self.update_check, CheckState::Available(_)) {
             let ready = matches!(self.update_install, InstallState::Ready(_));
             let label = match &self.update_install {
@@ -685,7 +681,10 @@ impl PlayerView {
                             ))),
                     )
                     .child(body)
-                    .child(footer),
+                    .when(
+                        matches!(self.update_check, CheckState::Available(_)),
+                        |el| el.child(footer),
+                    ),
             )
     }
 

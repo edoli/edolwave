@@ -69,19 +69,8 @@ pub struct Service {
 
 impl Service {
     pub fn new() -> Self {
-        let api = API.to_owned();
-        // Loopback-only fixture endpoint for debug UI tests. Never in release builds.
-        #[cfg(debug_assertions)]
-        let api = std::env::var("EDOLWAVE_UPDATE_TEST_API")
-            .ok()
-            .filter(|url| {
-                url.strip_prefix("http://127.0.0.1:")
-                    .and_then(|rest| rest.split('/').next()?.parse::<u16>().ok())
-                    .is_some()
-            })
-            .unwrap_or(api);
         Self {
-            api,
+            api: API.to_owned(),
             token: std::env::var("EDOLWAVE_GITHUB_TOKEN")
                 .ok()
                 .filter(|value| !value.trim().is_empty()),
