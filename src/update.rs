@@ -538,4 +538,34 @@ mod tests {
         assert_eq!(fs::read_dir(cache.path()).unwrap().count(), 0);
         server.join().unwrap();
     }
+
+    #[test]
+    #[ignore = "downloads a GitHub release; private repos require EDOLWAVE_GITHUB_TOKEN"]
+    fn github_release_can_be_checked_and_downloaded() {
+        let service = Service::new();
+        let mut response = service
+            .get(
+                &format!("{}/releases/latest", service.api),
+                false,
+                Duration::from_secs(20),
+            )
+            .unwrap();
+        let bytes = response
+            .body_mut()
+            .with_config()
+            .limit(1024 * 1024)
+            .read_to_vec()
+            .unwrap();
+        let release = select_release(&bytes, "0.0.0", package_name())
+            .unwrap()
+            .unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let package = service
+            .download_into(&release, cache.path(), |_, _| {})
+            .unwrap();
+        assert_eq!(
+            fs::metadata(&package.path).unwrap().len(),
+            release.asset.size
+        );
+    }
 }

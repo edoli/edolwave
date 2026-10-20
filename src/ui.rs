@@ -1258,11 +1258,7 @@ impl Render for PlayerView {
                     .child(div().w(px(1.)).h(px(20.)).bg(rgb(LINE)).mx_1())
                     .child(tool("minimize", "minimize").on_click(|_, w, _| w.minimize_window()))
                     .child(tool("maximize", "maximize").on_click(|_, w, _| w.zoom_window()))
-                    .child(
-                        tool("close", "close")
-                            .hover(|s| s.bg(rgb(0x663142)))
-                            .on_click(|_, _, cx| cx.quit()),
-                    ),
+                    .child(tool("close", "close").on_click(|_, _, cx| cx.quit())),
             )
             .child(
                 div()
@@ -1341,7 +1337,7 @@ fn tool(id: &'static str, name: &'static str) -> Stateful<Div> {
         .justify_center()
         .rounded(px(6.))
         .cursor_pointer()
-        .hover(|s| s.bg(rgb(0x263345)))
+        .hover(move |s| s.bg(rgb(if name == "close" { 0x663142 } else { 0x263345 })))
         .child(icon(name, 19., MUTED))
 }
 fn settings_button(
