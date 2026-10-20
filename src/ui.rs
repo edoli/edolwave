@@ -464,150 +464,66 @@ impl PlayerView {
     }
 
     fn settings_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let (status, detail, color) = match &self.update_check {
+        let (label, color, enabled, hint) = match &self.update_check {
             CheckState::Checking => (
-                "업데이트 확인 중…",
-                "최신 버전 정보를 가져오고 있습니다.".to_owned(),
+                "확인 중…".to_owned(),
                 MUTED,
+                false,
+                "최신 버전을 확인하고 있습니다.".to_owned(),
             ),
             CheckState::Current => (
-                "최신 버전입니다",
-                "현재 최신 버전을 사용하고 있습니다.".to_owned(),
+                "최신 버전".to_owned(),
                 0x65d6ac,
+                false,
+                "현재 최신 버전을 사용하고 있습니다.".to_owned(),
             ),
-            CheckState::Available(release) => (
-                "새 업데이트가 있습니다",
-                format!("최신 버전 {}", release.version),
-                BLUE,
-            ),
-            CheckState::Failed(error) => {
-                ("업데이트를 확인하지 못했습니다", error.clone(), 0xffb580)
+            CheckState::Failed(error) => ("확인 실패".to_owned(), 0xffb580, false, error.clone()),
+            CheckState::Available(release) => {
+                let (label, enabled, hint) = match &self.update_install {
+                    InstallState::Idle => (
+                        format!("v{} 업데이트", release.version),
+                        true,
+                        update::install_hint().to_owned(),
+                    ),
+                    InstallState::Downloading { received, total } => {
+                        let percent = if *total == 0 {
+                            0.
+                        } else {
+                            *received as f64 / *total as f64 * 100.
+                        };
+                        (
+                            format!("다운로드 {:.0}%", percent),
+                            false,
+                            "설치 파일을 다운로드하고 검증하고 있습니다.".to_owned(),
+                        )
+                    }
+                    InstallState::Ready(_) => (
+                        if cfg!(windows) {
+                            "설치하고 종료"
+                        } else {
+                            "설치 파일 열기"
+                        }
+                        .to_owned(),
+                        true,
+                        format!("파일 검증 완료. {}", update::install_hint()),
+                    ),
+                    InstallState::Failed(error) => {
+                        ("다시 다운로드".to_owned(), true, error.clone())
+                    }
+                    InstallState::Opened => (
+                        "다시 다운로드".to_owned(),
+                        true,
+                        format!("설치 파일을 열었습니다. {}", update::install_hint()),
+                    ),
+                };
+                (label, BLUE, enabled, hint)
             }
         };
-        let busy = matches!(self.update_check, CheckState::Checking)
-            || matches!(self.update_install, InstallState::Downloading { .. });
-        let mut body = div()
-            .id("settings-body")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .px(px(14.))
-            .py(px(8.))
-            .flex()
-            .flex_col()
-            .gap(px(6.))
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(rgb(MUTED))
-                    .child(format!(
-                        "소프트웨어 업데이트 · 현재 버전 {}",
-                        env!("CARGO_PKG_VERSION")
-                    )),
-            )
-            .child(
-                div()
-                    .text_size(px(14.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(color))
-                    .child(status),
-            )
-            .child(
-                div()
-                    .text_size(px(12.))
-                    .line_height(px(17.))
-                    .text_color(rgb(MUTED))
-                    .child(detail),
-            );
-        match &self.update_install {
-            InstallState::Downloading { received, total } => {
-                let fraction = if *total == 0 {
-                    0.
-                } else {
-                    *received as f32 / *total as f32
-                };
-                body = body
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .h(px(4.))
-                            .w_full()
-                            .rounded_full()
-                            .bg(rgb(LINE))
-                            .child(
-                                div()
-                                    .h_full()
-                                    .w(gpui::relative(fraction))
-                                    .rounded_full()
-                                    .bg(rgb(BLUE)),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(rgb(MUTED))
-                            .child(format!("다운로드 중 · {:.0}%", fraction * 100.)),
-                    );
-            }
-            InstallState::Ready(_) => {
-                body = body.child(
-                    div()
-                        .text_size(px(11.))
-                        .text_color(rgb(0x65d6ac))
-                        .child("다운로드 및 파일 검증 완료"),
-                );
-            }
-            InstallState::Failed(error) => {
-                body = body.child(
-                    div()
-                        .text_size(px(11.))
-                        .line_height(px(17.))
-                        .text_color(rgb(0xffb580))
-                        .child(error.clone()),
-                );
-            }
-            InstallState::Opened => {
-                body = body.child(
-                    div()
-                        .text_size(px(11.))
-                        .text_color(rgb(0x65d6ac))
-                        .child("설치 파일을 열었습니다."),
-                );
-            }
-            InstallState::Idle => {}
-        }
-        if matches!(self.update_check, CheckState::Available(_)) {
-            body = body.child(
-                div()
-                    .text_size(px(11.))
-                    .line_height(px(17.))
-                    .text_color(rgb(MUTED))
-                    .child(update::install_hint()),
-            );
-        }
-        let mut footer = div()
-            .h(px(42.))
-            .flex_shrink_0()
-            .px(px(14.))
-            .flex()
-            .items_center()
-            .justify_end()
-            .gap(px(8.))
-            .border_t_1()
-            .border_color(rgb(LINE));
-        if matches!(self.update_check, CheckState::Available(_)) {
-            let ready = matches!(self.update_install, InstallState::Ready(_));
-            let label = match &self.update_install {
-                InstallState::Downloading { .. } => "다운로드 중…",
-                InstallState::Ready(_) if cfg!(windows) => "설치하고 종료",
-                InstallState::Ready(_) => "설치 파일 열기",
-                InstallState::Failed(_) => "다시 다운로드",
-                InstallState::Opened => "다시 다운로드",
-                InstallState::Idle => "업데이트 다운로드",
-            };
-            footer = footer.child(
-                settings_button("install-update", label, true, !busy).on_click(cx.listener(
-                    move |this, _, _, cx| {
+        let ready = matches!(self.update_install, InstallState::Ready(_));
+        let action = if matches!(self.update_check, CheckState::Available(_)) {
+            settings_button("install-update", label, enabled)
+                .when(enabled, |el| {
+                    el.on_click(cx.listener(move |this, _, _, cx| {
                         if ready {
                             this.install_update(cx);
                         } else {
@@ -616,10 +532,47 @@ impl PlayerView {
                             }
                             this.download_update(cx);
                         }
-                    },
-                )),
+                    }))
+                })
+                .into_any_element()
+        } else {
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(color))
+                .child(label)
+                .into_any_element()
+        };
+        let body = div()
+            .id("settings-body")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .px(px(14.))
+            .py(px(8.))
+            .child(
+                div()
+                    .id("update-row")
+                    .h(px(36.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(12.))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .text_ellipsis()
+                            .text_size(px(12.))
+                            .child(format!("현재 버전: v{}", env!("CARGO_PKG_VERSION"))),
+                    )
+                    .child(
+                        div()
+                            .id("update-status")
+                            .flex_shrink_0()
+                            .tooltip(move |_, cx| cx.new(|_| SettingsTooltip(hint.clone())).into())
+                            .child(action),
+                    ),
             );
-        }
         div()
             .id("settings-overlay")
             .absolute()
@@ -680,11 +633,7 @@ impl PlayerView {
                                 },
                             ))),
                     )
-                    .child(body)
-                    .when(
-                        matches!(self.update_check, CheckState::Available(_)),
-                        |el| el.child(footer),
-                    ),
+                    .child(body),
             )
     }
 
@@ -1339,28 +1288,39 @@ fn tool(id: &'static str, name: &'static str) -> Stateful<Div> {
         .hover(move |s| s.bg(rgb(if name == "close" { 0x663142 } else { 0x263345 })))
         .child(icon(name, 19., MUTED))
 }
-fn settings_button(
-    id: &'static str,
-    label: &'static str,
-    primary: bool,
-    enabled: bool,
-) -> Stateful<Div> {
+struct SettingsTooltip(String);
+impl Render for SettingsTooltip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .max_w(px(300.))
+            .p(px(8.))
+            .rounded(px(6.))
+            .bg(rgb(PANEL))
+            .border_1()
+            .border_color(rgb(LINE))
+            .shadow_lg()
+            .font_family(".SystemUIFont")
+            .text_size(px(11.))
+            .line_height(px(16.))
+            .text_color(rgb(TEXT))
+            .child(self.0.clone())
+    }
+}
+fn settings_button(id: &'static str, label: String, enabled: bool) -> Stateful<Div> {
     div()
         .id(id)
-        .h(px(28.))
+        .h(px(26.))
         .px(px(10.))
         .flex_shrink_0()
         .flex()
         .items_center()
         .justify_center()
         .rounded(px(5.))
-        .border_1()
-        .border_color(rgb(if primary { BLUE } else { LINE }))
-        .bg(rgb(if primary { BLUE } else { PANEL }))
+        .bg(rgb(BLUE))
+        .text_color(rgb(TEXT))
         .text_size(px(11.))
         .when(enabled, |el| {
-            el.cursor_pointer()
-                .hover(move |el| el.bg(rgb(if primary { 0x55a0ff } else { 0x26364b })))
+            el.cursor_pointer().hover(|el| el.bg(rgb(0x55a0ff)))
         })
         .when(!enabled, |el| el.opacity(0.5))
         .child(label)
