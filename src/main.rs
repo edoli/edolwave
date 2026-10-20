@@ -47,7 +47,7 @@ fn main() -> anyhow::Result<()> {
             .open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    window_min_size: Some(size(px(480.), px(240.))),
+                    window_min_size: Some(size(px(480.), px(180.))),
                     titlebar: Some(TitlebarOptions {
                         title: Some("EdolWave".into()),
                         appears_transparent: !cfg!(target_os = "macos"),

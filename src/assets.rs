@@ -26,6 +26,9 @@ impl AssetSource for Icons {
             "repeat" => {
                 r#"<path d="m17 2 4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4m14-1v2a3 3 0 0 1-3 3H3"/>"#
             }
+            "speed" => {
+                r#"<path d="M4.2 18a9 9 0 1 1 15.6 0M4.2 18h15.6M12 4v2M5.7 7l1.4 1.4M18.3 7l-1.4 1.4M12 13l4-4"/><circle cx="12" cy="13" r="1.2" fill="white" stroke="none"/>"#
+            }
             "chevron" => r#"<path d="m6 9 6 6 6-6"/>"#,
             "close" => r#"<path d="m6 6 12 12M18 6 6 18"/>"#,
             "minimize" => r#"<path d="M5 12h14"/>"#,

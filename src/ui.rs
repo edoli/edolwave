@@ -62,6 +62,7 @@ pub struct PlayerView {
     volume_drag: bool,
     speed_menu_open: bool,
     volume_preview: Option<f32>,
+    volume_feedback_until: Option<Instant>,
     speed_preview: Option<f32>,
     last_volume: f32,
     info_open: bool,
@@ -122,6 +123,14 @@ impl PlayerView {
                 Timer::after(Duration::from_millis(33)).await;
                 if this
                     .update(cx, |this, cx| {
+                        if !this.volume_drag
+                            && this
+                                .volume_feedback_until
+                                .is_some_and(|until| Instant::now() >= until)
+                        {
+                            this.volume_feedback_until = None;
+                            cx.notify();
+                        }
                         let state = this.audio.snapshot();
                         if state.revision != this.state.revision {
                             this.seek_preview.acknowledge(state.seek_revision);
@@ -169,6 +178,7 @@ impl PlayerView {
             volume_drag: false,
             speed_menu_open: false,
             volume_preview: None,
+            volume_feedback_until: None,
             speed_preview: None,
             last_volume: 0.8,
             info_open: false,
@@ -338,8 +348,16 @@ impl PlayerView {
     fn set_volume(&mut self, volume: f32, cx: &mut Context<Self>) {
         let volume = volume.clamp(0., 1.);
         self.volume_preview = Some(volume);
+        self.volume_feedback_until = Some(Instant::now() + Duration::from_millis(1200));
         self.audio.send(Command::Volume(volume));
         cx.notify();
+    }
+
+    fn finish_volume_drag(&mut self, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.volume_drag) {
+            self.volume_feedback_until = Some(Instant::now() + Duration::from_millis(1200));
+            cx.notify();
+        }
     }
 
     fn set_volume_at(&mut self, x: Pixels, cx: &mut Context<Self>) {
@@ -406,6 +424,7 @@ impl PlayerView {
                 self.speed_preview.unwrap_or(self.state.speed)
             ))
             .child(icon("chevron", 12., MUTED))
+            .tooltip(|_, cx| cx.new(|_| TextTooltip("재생 속도".into())).into())
             .on_click(cx.listener(|this, _, _, cx| {
                 this.speed_menu_open = !this.speed_menu_open;
                 this.info_open = false;
@@ -423,9 +442,15 @@ impl PlayerView {
             .id("speed-menu")
             .occlude()
             .absolute()
-            .left(bounds.origin.x.min(viewport.width - px(104.)).max(px(8.)))
+            .left(
+                bounds
+                    .origin
+                    .x
+                    .min(viewport.width - bounds.size.width - px(8.))
+                    .max(px(8.)),
+            )
             .bottom(viewport.height - bounds.origin.y + px(4.))
-            .w(px(96.))
+            .w(bounds.size.width)
             .p(px(4.))
             .flex()
             .flex_col()
@@ -568,7 +593,7 @@ impl PlayerView {
                         div()
                             .id("update-status")
                             .flex_shrink_0()
-                            .tooltip(move |_, cx| cx.new(|_| SettingsTooltip(hint.clone())).into())
+                            .tooltip(move |_, cx| cx.new(|_| TextTooltip(hint.clone())).into())
                             .child(action),
                     ),
             );
@@ -762,30 +787,42 @@ impl PlayerView {
                         "volume"
                     },
                 )
+                .tooltip({
+                    let percent = (self.displayed_volume() * 100.).round() as u32;
+                    move |_, cx| {
+                        cx.new(|_| TextTooltip(format!("볼륨 {percent}% · 음소거 전환")))
+                            .into()
+                    }
+                })
                 .on_click(cx.listener(|this, _, _, cx| this.mute(cx))),
             )
-            .child(self.volume(cx))
-            .child(
-                div()
-                    .w(px(28.))
-                    .text_size(px(11.))
-                    .text_color(rgb(MUTED))
-                    .child(format!(
-                        "{}%",
-                        (self.displayed_volume() * 100.).round() as u32
-                    )),
-            );
+            .child(self.volume(narrow, cx))
+            .when(!narrow, |el| {
+                el.child(
+                    div()
+                        .w(px(28.))
+                        .text_size(px(11.))
+                        .text_color(rgb(MUTED))
+                        .child(format!(
+                            "{}%",
+                            (self.displayed_volume() * 100.).round() as u32
+                        )),
+                )
+            });
         let speed = div()
             .flex()
             .flex_shrink_0()
             .items_center()
-            .gap(px(10.))
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(rgb(MUTED))
-                    .child("재생 속도"),
-            )
+            .gap(px(if narrow { 6. } else { 10. }))
+            .when(narrow, |el| el.child(icon("speed", 20., MUTED)))
+            .when(!narrow, |el| {
+                el.child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(rgb(MUTED))
+                        .child("재생 속도"),
+                )
+            })
             .child(self.speed_dropdown(cx));
         let repeat = div()
             .id("repeat")
@@ -797,69 +834,53 @@ impl PlayerView {
             .px_2()
             .py_1()
             .rounded_md()
+            .when(narrow && self.state.repeat, |el| el.bg(rgb(0x203d60)))
             .hover(|s| s.bg(rgb(PANEL)))
             .child(icon(
                 "repeat",
                 20.,
                 if self.state.repeat { BLUE } else { MUTED },
             ))
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(rgb(MUTED))
-                    .child("반복 재생"),
-            )
-            .child(
-                div()
-                    .w(px(32.))
-                    .h(px(19.))
-                    .rounded_full()
-                    .bg(rgb(if self.state.repeat { BLUE } else { LINE }))
-                    .p(px(3.))
-                    .flex()
-                    .when(self.state.repeat, |d| d.justify_end())
-                    .child(div().size(px(13.)).rounded_full().bg(rgb(TEXT))),
-            )
+            .when(!narrow, |el| {
+                el.child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(rgb(MUTED))
+                        .child("반복 재생"),
+                )
+                .child(
+                    div()
+                        .w(px(32.))
+                        .h(px(19.))
+                        .rounded_full()
+                        .bg(rgb(if self.state.repeat { BLUE } else { LINE }))
+                        .p(px(3.))
+                        .flex()
+                        .when(self.state.repeat, |d| d.justify_end())
+                        .child(div().size(px(13.)).rounded_full().bg(rgb(TEXT))),
+                )
+            })
+            .tooltip({
+                let label = if self.state.repeat {
+                    "반복 재생 켜짐"
+                } else {
+                    "반복 재생 꺼짐"
+                };
+                move |_, cx| cx.new(|_| TextTooltip(label.into())).into()
+            })
             .on_click(cx.listener(|this, _, _, _| this.audio.send(Command::Repeat)));
         div()
-            .h(px(if narrow { 72. } else { 48. }))
+            .h(px(48.))
             .flex_shrink_0()
             .px(px(16.))
             .flex()
-            .map(|el| {
-                if narrow {
-                    el.flex_col()
-                        .gap(px(8.))
-                        .child(
-                            div()
-                                .h(px(32.))
-                                .flex_shrink_0()
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .child(transport)
-                                .child(volume),
-                        )
-                        .child(
-                            div()
-                                .h(px(32.))
-                                .flex_shrink_0()
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .child(speed)
-                                .child(repeat),
-                        )
-                } else {
-                    el.items_center()
-                        .justify_between()
-                        .gap(px(4.))
-                        .child(transport)
-                        .child(volume)
-                        .child(speed)
-                        .child(repeat)
-                }
-            })
+            .items_center()
+            .justify_between()
+            .gap(px(4.))
+            .child(transport)
+            .child(volume)
+            .child(speed)
+            .child(repeat)
     }
 
     fn key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -939,7 +960,7 @@ impl PlayerView {
             .relative()
             .w_full()
             .flex_1()
-            .min_h(px(48.))
+            .min_h(px(32.))
             .cursor_crosshair()
             .child(
                 canvas(
@@ -983,11 +1004,12 @@ impl PlayerView {
             )
     }
 
-    fn volume(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn volume(&self, narrow: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let cell = self.volume_bounds.clone();
         let v = self.displayed_volume();
         div()
             .id("volume-bar")
+            .relative()
             .w(px(80.))
             .h(px(30.))
             .cursor_pointer()
@@ -1026,6 +1048,36 @@ impl PlayerView {
                     },
                 )
                 .size_full(),
+            )
+            .when(
+                narrow && (self.volume_feedback_until.is_some() || self.volume_drag),
+                |el| {
+                    el.child(
+                        div()
+                            .id("volume-feedback")
+                            .occlude()
+                            .absolute()
+                            .bottom(px(32.))
+                            .left(px(16.))
+                            .h(px(24.))
+                            .min_w(px(48.))
+                            .px(px(8.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(5.))
+                            .bg(rgb(PANEL))
+                            .border_1()
+                            .border_color(rgb(LINE))
+                            .shadow_lg()
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(TEXT))
+                            .cursor_default()
+                            .child(format!("{}%", (v * 100.).round() as u32))
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()),
+                    )
+                },
             )
             .on_mouse_down(
                 MouseButton::Left,
@@ -1103,7 +1155,7 @@ impl Render for PlayerView {
                     if this.scrubbing.is_some() {
                         this.finish_seek(cx);
                     }
-                    this.volume_drag = false;
+                    this.finish_volume_drag(cx);
                     return;
                 }
                 if this.scrubbing.is_some() {
@@ -1118,14 +1170,14 @@ impl Render for PlayerView {
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
                     this.finish_seek(cx);
-                    this.volume_drag = false;
+                    this.finish_volume_drag(cx);
                 }),
             )
             .on_mouse_up_out(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
                     this.finish_seek(cx);
-                    this.volume_drag = false;
+                    this.finish_volume_drag(cx);
                 }),
             )
             .child(
@@ -1135,7 +1187,7 @@ impl Render for PlayerView {
                     .items_center()
                     .h(px(44.))
                     .px(px(16.))
-                    .gap(px(14.))
+                    .gap(px(4.))
                     .child(
                         div()
                             .id("title-drag")
@@ -1287,8 +1339,8 @@ fn tool(id: &'static str, name: &'static str) -> Stateful<Div> {
         .hover(move |s| s.bg(rgb(if name == "close" { 0x663142 } else { 0x263345 })))
         .child(icon(name, 19., MUTED))
 }
-struct SettingsTooltip(String);
-impl Render for SettingsTooltip {
+struct TextTooltip(String);
+impl Render for TextTooltip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
             .max_w(px(300.))
