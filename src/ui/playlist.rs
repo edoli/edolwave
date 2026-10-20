@@ -127,16 +127,13 @@ impl PlaylistView {
                                 }),
                         )
                         .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .child(
-                                    div()
-                                        .text_size(px(13.))
-                                        .text_ellipsis()
-                                        .when(current, |el| el.font_weight(FontWeight::SEMIBOLD))
-                                        .child(name),
-                                ),
+                            div().flex_1().min_w_0().child(
+                                div()
+                                    .text_size(px(13.))
+                                    .text_ellipsis()
+                                    .when(current, |el| el.font_weight(FontWeight::SEMIBOLD))
+                                    .child(name),
+                            ),
                         )
                         .when(current, |el| {
                             el.child(

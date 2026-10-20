@@ -739,12 +739,13 @@ impl PlayerView {
                     ),
             )
             .child(
-                div()
-                    .id("theme-row")
-                    .py(px(8.))
-                    .child(div().mb(px(6.)).text_size(px(12.)).child("테마"))
-                    .child(
-                        div().flex().gap(px(4.)).children(
+                div().id("theme-row").py(px(8.)).child(
+                    div()
+                        .flex()
+                        .gap(px(4.))
+                        .items_center()
+                        .child(div().mr(px(16.)).text_size(px(12.)).child("테마"))
+                        .children(
                             [
                                 (Theme::Light, "밝은 테마"),
                                 (Theme::Dark, "다크 테마"),
@@ -793,7 +794,7 @@ impl PlayerView {
                                     }))
                             }),
                         ),
-                    ),
+                ),
             )
             .child(
                 div()
