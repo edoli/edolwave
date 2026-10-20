@@ -54,6 +54,10 @@ impl Store {
         Ok(Self { directory })
     }
 
+    pub fn directory(&self) -> &std::path::Path {
+        &self.directory
+    }
+
     pub fn load(&self) -> Settings {
         let path = self.directory.join("settings.json");
         match fs::read(&path) {

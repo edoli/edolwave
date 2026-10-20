@@ -122,11 +122,19 @@ impl PlayerView {
                             update::Event::Progress { received, total } => {
                                 this.update_install = InstallState::Downloading { received, total };
                             }
-                            update::Event::Downloaded(result) => {
-                                this.update_install = match result {
-                                    Ok(package) => InstallState::Ready(package),
-                                    Err(error) => InstallState::Failed(error),
-                                };
+                            update::Event::Preparing => {
+                                this.update_install = InstallState::Preparing;
+                            }
+                            update::Event::Prepared(result) => {
+                                let result = result.and_then(|prepared| {
+                                    this.finish_volume_drag(cx);
+                                    prepared.commit().map_err(|error| format!("{error:#}"))
+                                });
+                                if let Err(error) = result {
+                                    this.update_install = InstallState::Failed(error);
+                                } else {
+                                    cx.quit();
+                                }
                             }
                         }
                         cx.notify();
@@ -183,6 +191,9 @@ impl PlayerView {
             }
         })
         .detach();
+        let update_install = crate::update_install::take_failure(settings_store.directory())
+            .map_or(InstallState::Idle, InstallState::Failed);
+        let settings_open = matches!(&update_install, InstallState::Failed(_));
         let mut view = Self {
             audio,
             state,
@@ -206,7 +217,7 @@ impl PlayerView {
                 0.8
             },
             info_open: false,
-            settings_open: false,
+            settings_open,
             settings_store,
             preferences,
             settings_error: None,
@@ -214,7 +225,7 @@ impl PlayerView {
             update_service: update::Service::new(),
             update_events,
             update_check: CheckState::Checking,
-            update_install: InstallState::Idle,
+            update_install,
             started,
             first_render: true,
         };
@@ -228,11 +239,13 @@ impl PlayerView {
 
     fn check_updates(&mut self, cx: &mut Context<Self>) {
         if matches!(self.update_check, CheckState::Checking)
-            || matches!(self.update_install, InstallState::Downloading { .. })
+            || matches!(
+                self.update_install,
+                InstallState::Downloading { .. } | InstallState::Preparing
+            )
         {
             return;
         }
-        self.update_install = InstallState::Idle;
         self.update_check = CheckState::Checking;
         self.update_service
             .check_in_background(self.update_events.clone());
@@ -254,21 +267,7 @@ impl PlayerView {
             total: 0,
         };
         self.update_service
-            .download_in_background(release.clone(), self.update_events.clone());
-        cx.notify();
-    }
-
-    fn install_update(&mut self, cx: &mut Context<Self>) {
-        let state = std::mem::replace(&mut self.update_install, InstallState::Idle);
-        let InstallState::Ready(package) = state else {
-            self.update_install = state;
-            return;
-        };
-        match package.launch() {
-            Ok(true) => cx.quit(),
-            Ok(false) => self.update_install = InstallState::Opened,
-            Err(error) => self.update_install = InstallState::Failed(error.to_string()),
-        }
+            .update_in_background(release.clone(), self.update_events.clone());
         cx.notify();
     }
 
@@ -597,41 +596,24 @@ impl PlayerView {
                             "설치 파일을 다운로드하고 검증하고 있습니다.".to_owned(),
                         )
                     }
-                    InstallState::Ready(_) => (
-                        if cfg!(windows) {
-                            "설치하고 종료"
-                        } else {
-                            "설치 파일 열기"
-                        }
-                        .to_owned(),
-                        true,
-                        format!("파일 검증 완료. {}", update::install_hint()),
+                    InstallState::Preparing => (
+                        "업데이트 준비 중…".to_owned(),
+                        false,
+                        "설치 준비가 끝나면 자동으로 종료하고 업데이트 후 다시 실행합니다."
+                            .to_owned(),
                     ),
                     InstallState::Failed(error) => {
-                        ("다시 다운로드".to_owned(), true, error.clone())
+                        ("업데이트 다시 시도".to_owned(), true, error.clone())
                     }
-                    InstallState::Opened => (
-                        "다시 다운로드".to_owned(),
-                        true,
-                        format!("설치 파일을 열었습니다. {}", update::install_hint()),
-                    ),
                 };
                 (label, colors.accent, enabled, hint)
             }
         };
-        let ready = matches!(self.update_install, InstallState::Ready(_));
         let action = if matches!(self.update_check, CheckState::Available(_)) {
             settings_button(colors, "install-update", label, enabled)
                 .when(enabled, |el| {
                     el.on_click(cx.listener(move |this, _, _, cx| {
-                        if ready {
-                            this.install_update(cx);
-                        } else {
-                            if matches!(this.update_install, InstallState::Opened) {
-                                this.update_install = InstallState::Idle;
-                            }
-                            this.download_update(cx);
-                        }
+                        this.download_update(cx);
                     }))
                 })
                 .into_any_element()
@@ -777,6 +759,20 @@ impl PlayerView {
                                 cx.notify();
                             })),
                     ),
+            )
+            .when_some(
+                match &self.update_install {
+                    InstallState::Failed(error) => Some(error.clone()),
+                    _ => None,
+                },
+                |el, error| {
+                    el.child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(rgb(colors.warning))
+                            .child(error),
+                    )
+                },
             )
             .when_some(self.settings_error.clone(), |el, error| {
                 el.child(

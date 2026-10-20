@@ -7,6 +7,7 @@ mod settings;
 mod theme;
 mod ui;
 mod update;
+mod update_install;
 mod waveform;
 mod waveform_view;
 mod wsola;

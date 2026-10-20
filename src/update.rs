@@ -44,20 +44,22 @@ pub enum CheckState {
 pub enum InstallState {
     Idle,
     Downloading { received: u64, total: u64 },
-    Ready(Package),
-    Opened,
+    Preparing,
     Failed(String),
 }
 
 pub enum Event {
     Checked(Result<Option<Release>, String>),
     Progress { received: u64, total: u64 },
-    Downloaded(Result<Package, String>),
+    Preparing,
+    Prepared(Result<crate::update_install::PreparedUpdate, String>),
 }
 
 pub struct Package {
     directory: tempfile::TempDir,
     pub path: PathBuf,
+    version: String,
+    digest: [u8; 32],
 }
 
 /// Networking and hashing run on worker threads, never the GPUI thread.
@@ -70,7 +72,16 @@ pub struct Service {
 impl Service {
     pub fn new() -> Self {
         Self {
-            api: API.to_owned(),
+            api: {
+                // A local release fixture is available only in debug builds.
+                #[cfg(debug_assertions)]
+                let api = std::env::var("EDOLWAVE_UPDATE_TEST_API")
+                    .ok()
+                    .filter(|url| url.starts_with("http://127.0.0.1:"));
+                #[cfg(not(debug_assertions))]
+                let api: Option<String> = None;
+                api.unwrap_or_else(|| API.to_owned())
+            },
             token: std::env::var("EDOLWAVE_GITHUB_TOKEN")
                 .ok()
                 .filter(|value| !value.trim().is_empty()),
@@ -141,15 +152,24 @@ impl Service {
         });
     }
 
-    pub fn download_in_background(&self, release: Release, events: async_channel::Sender<Event>) {
+    pub fn update_in_background(&self, release: Release, events: async_channel::Sender<Event>) {
         let service = self.clone();
         std::thread::spawn(move || {
             let result = service
                 .download(&release, |received, total| {
                     let _ = events.try_send(Event::Progress { received, total });
                 })
-                .map_err(|error| error.to_string());
-            let _ = events.send_blocking(Event::Downloaded(result));
+                .and_then(|package| {
+                    events.send_blocking(Event::Preparing)?;
+                    crate::update_install::prepare(
+                        package.directory,
+                        package.path,
+                        package.version,
+                        package.digest,
+                    )
+                })
+                .map_err(|error| format!("{error:#}"));
+            let _ = events.send_blocking(Event::Prepared(result));
         });
     }
 
@@ -170,7 +190,7 @@ impl Service {
         let digest = parse_digest(release.asset.digest.as_deref())?;
         fs::create_dir_all(cache).context("다운로드 폴더를 만들지 못했습니다.")?;
         let directory = tempfile::Builder::new()
-            .prefix("update-")
+            .prefix("edolwave-update-")
             .tempdir_in(cache)
             .context("다운로드 폴더를 만들지 못했습니다.")?;
         let path = directory.path().join(&release.asset.name);
@@ -190,7 +210,12 @@ impl Service {
         output
             .sync_all()
             .context("설치 파일을 저장하지 못했습니다.")?;
-        Ok(Package { directory, path })
+        Ok(Package {
+            directory,
+            path,
+            version: release.version.to_string(),
+            digest,
+        })
     }
 }
 
@@ -281,63 +306,38 @@ fn transfer_verified(
 
 pub fn package_name() -> &'static str {
     if cfg!(target_os = "windows") {
-        "edolwave-installer-exe.exe"
+        if std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|p| p.join("unins000.exe")))
+            .is_some_and(|p| p.is_file())
+        {
+            "edolwave-installer-exe.exe"
+        } else {
+            "edolwave-windows.zip"
+        }
     } else if cfg!(target_os = "macos") {
-        "edolwave-installer-dmg.dmg"
-    } else if std::env::var_os("APPIMAGE").is_some()
-        || !Path::new("/usr/share/doc/edolwave").exists()
-    {
+        if std::env::current_exe().ok().is_some_and(|exe| {
+            exe.ancestors()
+                .any(|path| path.extension().is_some_and(|ext| ext == "app"))
+        }) {
+            "edolwave-installer-dmg.dmg"
+        } else {
+            "edolwave-mac.zip"
+        }
+    } else if std::env::var_os("APPIMAGE").is_some() {
         "edolwave-installer-appimage.AppImage"
-    } else {
+    } else if std::env::current_exe()
+        .ok()
+        .is_some_and(|exe| exe == Path::new("/usr/bin/edolwave"))
+    {
         "edolwave-installer-deb.deb"
+    } else {
+        "edolwave-linux.zip"
     }
 }
 
 pub fn install_hint() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "설치 프로그램을 실행하면 EdolWave가 종료됩니다. 설치를 완료한 뒤 다시 실행해 주세요."
-    } else if cfg!(target_os = "macos") {
-        "DMG를 연 뒤 EdolWave를 종료하고 앱을 Applications 폴더에 복사해 주세요."
-    } else if package_name().ends_with(".deb") {
-        "패키지 설치 화면에서 업데이트를 완료한 뒤 EdolWave를 다시 실행해 주세요."
-    } else {
-        "다운로드 폴더에서 새 AppImage로 기존 파일을 교체한 뒤 실행 권한을 부여해 주세요."
-    }
-}
-
-impl Package {
-    /// Keep the file alive after handing it to the OS installer, which outlives this process.
-    pub fn launch(self) -> Result<bool> {
-        #[cfg(windows)]
-        {
-            let mut command = std::process::Command::new(&self.path);
-            command.arg("/SP-").arg("/NORESTART");
-            if let Ok(exe) = std::env::current_exe()
-                && let Some(directory) = exe.parent()
-                && directory.join("unins000.exe").exists()
-            {
-                command.arg(format!("/DIR={}", directory.display()));
-            }
-            command
-                .spawn()
-                .context("설치 프로그램을 실행하지 못했습니다.")?;
-        }
-        #[cfg(target_os = "macos")]
-        open::that(&self.path).context("DMG 파일을 열지 못했습니다.")?;
-        #[cfg(target_os = "linux")]
-        if self.path.extension().is_some_and(|ext| ext == "deb") {
-            open::that(&self.path).context("패키지 설치 화면을 열지 못했습니다.")?;
-        } else {
-            open::that(
-                self.path
-                    .parent()
-                    .context("다운로드 폴더를 찾을 수 없습니다.")?,
-            )
-            .context("다운로드 폴더를 열지 못했습니다.")?;
-        }
-        let _ = self.directory.keep();
-        Ok(cfg!(windows))
-    }
+    "업데이트를 누르면 다운로드·검증 후 자동 설치하고 다시 실행합니다. 필요한 경우 운영체제 권한 확인이 표시됩니다."
 }
 
 #[cfg(test)]
@@ -446,6 +446,7 @@ mod tests {
                         Err(error) => panic!("fixture accept: {error}"),
                     }
                 };
+                connection.set_nonblocking(false).unwrap();
                 connection
                     .set_read_timeout(Some(Duration::from_secs(5)))
                     .unwrap();

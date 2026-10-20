@@ -13,7 +13,6 @@ async-channel = "2"
 dirs = "4"
 gpui = { version = "0.2.2", default-features = false, features = ["windows-manifest"] }
 interprocess = { version = "2.4", features = ["tokio"] }
-open = "5"
 rodio = { version = "0.23.0", default-features = false, features = ["playback", "symphonia-all", "symphonia-simd"] }
 semver = "1"
 serde = { version = "1", features = ["derive"] }

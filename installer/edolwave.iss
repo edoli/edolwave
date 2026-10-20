@@ -53,6 +53,7 @@ Name: "fileassociations"; Description: "Add EdolWave to Open with and Default ap
 #include AssociationsFile
 
 [Registry]
+Root: HKA; Subkey: "Software\Edoli\EdolWave"; ValueType: string; ValueName: "InstallLocation"; ValueData: "{app}"; Flags: uninsdeletevalue uninsdeletekeyifempty
 Root: HKA; Subkey: "Software\Classes\EdolWave.Audio"; Check: not HasAudioAssociations; Flags: deletekey
 Root: HKA; Subkey: "Software\Classes\Applications\edolwave.exe"; Check: not HasAudioAssociations; Flags: deletekey
 Root: HKA; Subkey: "Software\Edoli\EdolWave\Capabilities"; Check: not HasAudioAssociations; Flags: deletekey
@@ -84,6 +85,8 @@ Filename: "{app}\edolwave.exe"; Description: "{cm:LaunchProgram,EdolWave}"; Flag
 Filename: "{code:GetDefaultAppsURI}"; Description: "Choose EdolWave as your default audio player in Windows Settings"; Check: HasAudioAssociations; Flags: shellexec postinstall skipifsilent runasoriginaluser
 
 [Code]
+#include "associations-ui.iss"
+
 function HasAudioAssociations: Boolean;
 begin
   Result := WizardIsTaskSelected('fileassociations');
