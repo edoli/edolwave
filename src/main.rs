@@ -7,6 +7,7 @@ mod ui;
 mod update;
 mod waveform;
 mod waveform_view;
+mod wsola;
 
 use gpui::{
     App, Application, Bounds, TitlebarOptions, WindowBounds, WindowOptions, prelude::*, px, size,

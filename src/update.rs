@@ -168,7 +168,7 @@ impl Service {
         progress: impl FnMut(u64, u64),
     ) -> Result<Package> {
         let digest = parse_digest(release.asset.digest.as_deref())?;
-        fs::create_dir_all(&cache).context("다운로드 폴더를 만들지 못했습니다.")?;
+        fs::create_dir_all(cache).context("다운로드 폴더를 만들지 못했습니다.")?;
         let directory = tempfile::Builder::new()
             .prefix("update-")
             .tempdir_in(cache)

@@ -4,6 +4,8 @@
 mod audio;
 #[path = "../src/waveform.rs"]
 mod waveform;
+#[path = "../src/wsola.rs"]
+mod wsola;
 
 use audio::{Audio, Command, Snapshot};
 use std::{
@@ -111,6 +113,59 @@ fn real_output_play_pause_seek_repeat_and_format_matrix() {
     let fixture = Fixture::new();
     let player = Audio::new();
     player.send(Command::Volume(0.01));
+    player.load(fixture.0.clone());
+    wait(&player, "initial load for tempo clock", |s| {
+        s.playing && s.waveform.is_some()
+    });
+    player.send(Command::Toggle);
+    wait(&player, "pause for tempo clock", |s| !s.playing);
+    for speed in [0.5, 1.5, 2.0] {
+        player.send(Command::Speed(speed));
+        wait(&player, "tempo applied while paused", |s| s.speed == speed);
+        let seek_id = player.seek(Duration::from_millis(500));
+        let paused = wait(&player, "tempo seek acknowledgement", |s| {
+            s.seek_revision == seek_id
+        });
+        assert!(!paused.playing);
+        assert_eq!(paused.position, Duration::from_millis(500));
+        std::thread::sleep(Duration::from_millis(60));
+        assert_eq!(
+            player.snapshot().position,
+            paused.position,
+            "clock moved while paused"
+        );
+        player.send(Command::Toggle);
+        let initial = wait(&player, "tempo playback started", |s| s.playing);
+        let started = Instant::now();
+        std::thread::sleep(Duration::from_millis(260));
+        let later = player.snapshot();
+        let expected = started.elapsed().mul_f32(speed);
+        let actual = later.position.saturating_sub(initial.position);
+        assert!(
+            actual.abs_diff(expected) < Duration::from_millis(80),
+            "{speed}x source clock: advanced {actual:?}, expected {expected:?}"
+        );
+        // Change tempo without recreating the source: the source clock must
+        // integrate each segment rather than multiply all elapsed time anew.
+        let next_speed = if speed == 0.5 { 2. } else { 0.5 };
+        player.send(Command::Speed(next_speed));
+        let changed = wait(&player, "live tempo applied", |s| s.speed == next_speed);
+        let started = Instant::now();
+        std::thread::sleep(Duration::from_millis(260));
+        let advanced = player.snapshot().position.saturating_sub(changed.position);
+        let expected = started.elapsed().mul_f32(next_speed);
+        assert!(
+            advanced.abs_diff(expected) < Duration::from_millis(80),
+            "live {speed}x -> {next_speed}x source clock: {advanced:?}, expected {expected:?}"
+        );
+        player.send(Command::Toggle);
+        wait(&player, "pause after live tempo change", |s| !s.playing);
+    }
+    player.send(Command::Speed(1.));
+    player.send(Command::Stop);
+    wait(&player, "reset after tempo clock tests", |s| {
+        !s.playing && s.position.is_zero() && s.speed == 1.
+    });
     let mut files = vec![fixture.0.clone()];
     if let Some(dir) = std::env::var_os("EDOLWAVE_TEST_AUDIO_DIR") {
         files.extend(

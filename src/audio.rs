@@ -1,5 +1,6 @@
 //! Audio device, disk I/O and seeks live off the UI thread.
 use crate::waveform::{self, Waveform};
+use crate::wsola::{PlaybackControl, Wsola};
 use anyhow::{Context as _, Result, anyhow};
 use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source};
 use std::{
@@ -125,6 +126,7 @@ struct Worker {
     tx: Sender<Command>,
     output: Option<MixerDeviceSink>,
     player: Option<Player>,
+    playback: Option<PlaybackControl>,
     source: Option<PathBuf>,
     id: u64,
     position_offset: Duration,
@@ -139,6 +141,7 @@ impl Worker {
             tx,
             output: None,
             player: None,
+            playback: None,
             source: None,
             id: 0,
             position_offset: Duration::ZERO,
@@ -196,7 +199,11 @@ impl Worker {
                             });
                         }
                     } else {
-                        let pos = player.get_pos().saturating_add(self.position_offset);
+                        let pos = self
+                            .playback
+                            .as_ref()
+                            .map_or(Duration::ZERO, PlaybackControl::position)
+                            .saturating_add(self.position_offset);
                         self.update(|s| {
                             s.position = if s.duration.is_zero() {
                                 pos
@@ -219,6 +226,7 @@ impl Worker {
                 }
                 self.id = id;
                 self.player.take();
+                self.playback.take();
                 self.source.take();
                 self.update(|s| {
                     s.path = Some(path.clone());
@@ -291,10 +299,13 @@ impl Worker {
                 self.update(|s| s.volume = v);
             }
             Command::Speed(v) => {
-                if let Some(p) = &self.player {
-                    p.set_speed(v);
+                if v.is_finite() {
+                    let v = v.clamp(0.5, 2.);
+                    if let Some(playback) = &self.playback {
+                        playback.set_speed(v);
+                    }
+                    self.update(|s| s.speed = v);
                 }
-                self.update(|s| s.speed = v);
             }
             Command::Repeat => self.update(|s| s.repeat = !s.repeat),
             Command::Waveform(id, result) => {
@@ -349,8 +360,9 @@ impl Worker {
         let player = Player::connect_new(self.output.as_ref().unwrap().mixer());
         player.pause();
         player.set_volume(s.volume);
-        player.set_speed(s.speed);
+        let (source, playback) = Wsola::new(source, s.speed);
         player.append(source);
+        self.playback = Some(playback);
         self.player = Some(player);
         self.position_offset = pos;
         if playing {
