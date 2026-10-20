@@ -19,6 +19,7 @@ impl AssetSource for Icons {
                 r#"<path d="M18 5v14"/><path d="m6 5 10 7-10 7Z" fill="white" stroke="none"/>"#
             }
             "folder" => r#"<path d="M3 8V5h6l2 3h10v12H3Z"/><path d="M3 10h18"/>"#,
+            "playlist" => r#"<path d="M8 6h13M8 12h13M8 18h13M3 6h.1M3 12h.1M3 18h.1"/>"#,
             "volume" => {
                 r#"<path d="M3 9h4l5-4v14l-5-4H3Z"/><path d="M16 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/>"#
             }

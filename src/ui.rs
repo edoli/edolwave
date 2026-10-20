@@ -16,6 +16,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod playlist;
+
 const SPEED_STEPS: [f32; 7] = [0.5, 0.75, 1., 1.25, 1.5, 1.75, 2.];
 
 #[derive(Default)]
@@ -47,6 +49,8 @@ pub struct PlayerView {
     audio: Audio,
     state: Snapshot,
     playlist: Vec<PathBuf>,
+    playlist_revision: u64,
+    playlist_window: Option<gpui::WindowHandle<playlist::PlaylistView>>,
     index: usize,
     focus: FocusHandle,
     wave_bounds: Rc<Cell<Bounds<Pixels>>>,
@@ -198,6 +202,8 @@ impl PlayerView {
             audio,
             state,
             playlist: vec![],
+            playlist_revision: 0,
+            playlist_window: None,
             index: 0,
             focus,
             wave_bounds: Rc::new(Cell::new(Bounds::default())),
@@ -272,17 +278,78 @@ impl PlayerView {
     }
 
     fn open(&mut self, files: Vec<PathBuf>, cx: &mut Context<Self>) {
+        if files.is_empty() {
+            return;
+        }
         self.playlist = files;
-        self.index = 0;
+        self.playlist_revision = self.playlist_revision.wrapping_add(1);
+        self.play_index(0, cx);
+    }
+
+    fn append(&mut self, files: Vec<PathBuf>, cx: &mut Context<Self>) {
+        if files.is_empty() {
+            return;
+        }
+        let was_empty = self.playlist.is_empty();
+        self.playlist.extend(files);
+        self.playlist_revision = self.playlist_revision.wrapping_add(1);
+        if was_empty {
+            self.play_index(0, cx);
+        } else {
+            cx.notify();
+        }
+    }
+
+    fn play_index(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(path) = self.playlist.get(index).cloned() else {
+            return;
+        };
+        self.index = index;
         self.scrubbing = None;
         self.seek_preview.clear();
-        if let Some(path) = self.playlist.first() {
-            self.audio.load(path.clone());
-            self.state.loading = true;
-            self.state.path = Some(path.clone());
-            self.state.error = None;
-        }
+        self.audio.load(path.clone());
+        self.state.loading = true;
+        self.state.path = Some(path);
+        self.state.error = None;
         cx.notify();
+    }
+
+    fn show_playlist(&mut self, cx: &mut Context<Self>) {
+        if let Some(handle) = self.playlist_window {
+            if handle
+                .update(cx, |_, window, _| window.activate_window())
+                .is_ok()
+            {
+                return;
+            }
+        }
+        let player = cx.entity();
+        let index = self.index;
+        let bounds = Bounds::centered(None, size(px(480.), px(440.)), cx);
+        // GPUI draws a new window before open_window returns. Defer creation
+        // until this player's update ends so the playlist can read its state.
+        cx.defer(move |cx| {
+            let playlist_player = player.clone();
+            match cx.open_window(
+                gpui::WindowOptions {
+                    window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
+                    window_min_size: Some(size(px(320.), px(240.))),
+                    titlebar: Some(gpui::TitlebarOptions {
+                        title: Some("EdolWave · 재생 목록".into()),
+                        appears_transparent: !cfg!(target_os = "macos"),
+                        ..Default::default()
+                    }),
+                    app_id: Some("dev.edoli.edolwave".into()),
+                    ..Default::default()
+                },
+                move |window, cx| {
+                    cx.new(|cx| playlist::PlaylistView::new(playlist_player, index, window, cx))
+                },
+            ) {
+                Ok(handle) => player.update(cx, |this, _| this.playlist_window = Some(handle)),
+                Err(error) => eprintln!("재생 목록 창을 열 수 없습니다: {error}"),
+            }
+        });
     }
 
     pub fn open_from_instance(
@@ -303,15 +370,32 @@ impl PlayerView {
     }
 
     fn choose(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.choose_files(false, cx);
+    }
+
+    fn choose_files(&mut self, append: bool, cx: &mut Context<Self>) {
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: true,
-            prompt: Some("오디오 파일 열기".into()),
+            prompt: Some(
+                if append {
+                    "재생 목록에 추가"
+                } else {
+                    "오디오 파일 열기"
+                }
+                .into(),
+            ),
         });
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(paths))) = paths.await {
-                let _ = this.update(cx, |this, cx| this.open(paths, cx));
+                let _ = this.update(cx, |this, cx| {
+                    if append {
+                        this.append(paths, cx);
+                    } else {
+                        this.open(paths, cx);
+                    }
+                });
             }
         })
         .detach();
@@ -319,11 +403,9 @@ impl PlayerView {
 
     fn navigate(&mut self, direction: isize, cx: &mut Context<Self>) {
         if self.playlist.len() > 1 {
-            self.index =
+            let index =
                 (self.index as isize + direction).rem_euclid(self.playlist.len() as isize) as usize;
-            self.audio.load(self.playlist[self.index].clone());
-            self.scrubbing = None;
-            self.seek_preview.clear();
+            self.play_index(index, cx);
         } else {
             self.seek_to(Duration::ZERO, cx);
         }
@@ -860,6 +942,14 @@ impl PlayerView {
                 },
             ),
             ("재생 / 일시정지", "Space"),
+            (
+                "재생 목록",
+                if cfg!(target_os = "macos") {
+                    "Cmd + L"
+                } else {
+                    "Ctrl + L"
+                },
+            ),
             ("5초 탐색", "← / →"),
             ("처음으로", "Home"),
             ("볼륨", "↑ / ↓"),
@@ -1101,6 +1191,10 @@ impl PlayerView {
         };
         if command && key == "o" {
             self.choose(window, cx);
+            return;
+        }
+        if command && key == "l" {
+            self.show_playlist(cx);
             return;
         }
         if command && key == "q" {
@@ -1414,6 +1508,14 @@ impl Render for PlayerView {
                                     .text_ellipsis()
                                     .child(name),
                             ),
+                    )
+                    .child(
+                        tool(colors, "playlist", "playlist")
+                            .tooltip(move |_, cx| {
+                                cx.new(|_| TextTooltip("재생 목록 · Ctrl/Cmd + L".into(), colors))
+                                    .into()
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| this.show_playlist(cx))),
                     )
                     .child(
                         tool(colors, "open", "folder")

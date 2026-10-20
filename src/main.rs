@@ -84,7 +84,12 @@ fn main() -> anyhow::Result<()> {
             }
         })
         .detach();
-        cx.on_window_closed(|cx| cx.quit()).detach();
+        cx.on_window_closed(move |cx| {
+            if window.read(cx).is_err() {
+                cx.quit();
+            }
+        })
+        .detach();
         cx.activate(true);
     });
     Ok(())
