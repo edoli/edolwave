@@ -4,6 +4,7 @@ mod assets;
 mod audio;
 mod instance;
 mod settings;
+mod theme;
 mod ui;
 mod update;
 mod waveform;

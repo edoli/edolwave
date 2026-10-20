@@ -1,5 +1,6 @@
 //! Continuous, antialiased waveform silhouettes. Geometry is rebuilt only on
 //! file/size/DPI changes; playback updates only the color clipping boundary.
+use crate::theme::Palette;
 use crate::waveform::Waveform;
 use gpui::{
     BorderStyle, Bounds, ContentMask, Path, PathBuilder, Pixels, Window, fill, point, px, quad,
@@ -25,6 +26,7 @@ impl WaveformCache {
         wave: Option<&Arc<Waveform>>,
         bounds: Bounds<Pixels>,
         progress: Option<f32>,
+        colors: Palette,
         window: &mut Window,
     ) {
         let scale = window.scale_factor();
@@ -40,7 +42,7 @@ impl WaveformCache {
                 point(bounds.origin.x, center),
                 size(bounds.size.width, px(0.5)),
             ),
-            rgb(0x26374d),
+            rgb(colors.wave_axis),
         ));
         if let Some(wave) = wave.filter(|w| !w.peaks.is_empty()) {
             if self.geometry.as_ref().is_none_or(|g| {
@@ -49,12 +51,12 @@ impl WaveformCache {
                 self.geometry = Geometry::build(wave.clone(), bounds, scale);
             }
             if let Some(g) = &self.geometry {
-                window.paint_path(g.fill.clone(), rgb(0x526d8e));
+                window.paint_path(g.fill.clone(), rgb(colors.wave_idle));
                 if let Some(x) = playhead_x.filter(|x| *x > bounds.origin.x) {
                     let clip =
                         Bounds::new(bounds.origin, size(x - bounds.origin.x, bounds.size.height));
                     window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
-                        window.paint_path(g.fill.clone(), rgb(0x388cff));
+                        window.paint_path(g.fill.clone(), rgb(colors.accent));
                     });
                 }
             }
@@ -67,11 +69,11 @@ impl WaveformCache {
             let line_width = px((1.25 * scale).round().max(1.) / scale);
             window.paint_quad(fill(
                 Bounds::new(point(x - snap(px(2.)), line_y), size(snap(px(5.)), line_h)),
-                rgba(0x6db9ff14),
+                rgba(colors.playhead_glow),
             ));
             window.paint_quad(fill(
                 Bounds::new(point(x, line_y), size(line_width, line_h)),
-                rgb(0x9fceff),
+                rgb(colors.playhead),
             ));
             window.paint_quad(quad(
                 Bounds::new(
@@ -82,7 +84,7 @@ impl WaveformCache {
                     size(snap(px(6.5)), snap(px(6.5))),
                 ),
                 px(3.25),
-                rgb(0x9fceff),
+                rgb(colors.playhead),
                 px(0.),
                 transparent_black(),
                 BorderStyle::Solid,

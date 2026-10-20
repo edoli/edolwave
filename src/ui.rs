@@ -1,5 +1,6 @@
 use crate::audio::{Audio, Command, Snapshot};
 use crate::settings::{Settings, Store};
+use crate::theme::{Palette, Theme};
 use crate::update::{self, CheckState, InstallState};
 use crate::waveform_view::WaveformCache;
 use gpui::{
@@ -15,12 +16,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-const BG: u32 = 0x141c27;
-const PANEL: u32 = 0x1b2533;
-const LINE: u32 = 0x2b384a;
-const TEXT: u32 = 0xe9eff8;
-const MUTED: u32 = 0x8c9cb1;
-const BLUE: u32 = 0x388cff;
 const SPEED_STEPS: [f32; 7] = [0.5, 0.75, 1., 1.25, 1.5, 1.75, 2.];
 
 #[derive(Default)]
@@ -71,6 +66,7 @@ pub struct PlayerView {
     settings_store: Store,
     preferences: Settings,
     settings_error: Option<String>,
+    palette: Palette,
     update_service: update::Service,
     update_events: async_channel::Sender<update::Event>,
     update_check: CheckState,
@@ -88,6 +84,12 @@ impl PlayerView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        cx.observe_window_appearance(window, |this, window, cx| {
+            this.palette = this.preferences.theme.palette(window.appearance());
+            cx.notify();
+        })
+        .detach();
+        let palette = preferences.theme.palette(window.appearance());
         let audio = Audio::new();
         // Queue preferences before any file is loaded, so playback starts with
         // the saved values even while the audio worker is still starting.
@@ -208,6 +210,7 @@ impl PlayerView {
             settings_store,
             preferences,
             settings_error: None,
+            palette,
             update_service: update::Service::new(),
             update_events,
             update_check: CheckState::Checking,
@@ -423,6 +426,13 @@ impl PlayerView {
         cx.notify();
     }
 
+    fn set_theme(&mut self, theme: Theme, window: &Window, cx: &mut Context<Self>) {
+        self.preferences.theme = theme;
+        self.palette = theme.palette(window.appearance());
+        self.persist(|settings| settings.theme = theme);
+        cx.notify();
+    }
+
     fn scroll_speed(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
         let delta = event.delta.pixel_delta(px(16.)).y;
         if delta != px(0.) {
@@ -442,6 +452,7 @@ impl PlayerView {
     }
 
     fn speed_dropdown(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = self.palette;
         let cell = self.speed_bounds.clone();
         div()
             .id("speed-dropdown")
@@ -455,11 +466,15 @@ impl PlayerView {
             .px(px(10.))
             .rounded(px(6.))
             .border_1()
-            .border_color(rgb(if self.speed_menu_open { BLUE } else { LINE }))
-            .bg(rgb(PANEL))
+            .border_color(rgb(if self.speed_menu_open {
+                colors.accent
+            } else {
+                colors.line
+            }))
+            .bg(rgb(colors.panel))
             .text_size(px(12.))
             .cursor_pointer()
-            .hover(|s| s.bg(rgb(0x26364b)))
+            .hover(move |s| s.bg(rgb(colors.hover)))
             .child(
                 canvas(move |bounds, _, _| cell.set(bounds), |_, _, _, _| {})
                     .absolute()
@@ -471,8 +486,8 @@ impl PlayerView {
                 "{:.2}×",
                 self.speed_preview.unwrap_or(self.state.speed)
             ))
-            .child(icon("chevron", 12., MUTED))
-            .tooltip(|_, cx| cx.new(|_| TextTooltip("재생 속도".into())).into())
+            .child(icon("chevron", 12., colors.muted))
+            .tooltip(move |_, cx| cx.new(|_| TextTooltip("재생 속도".into(), colors)).into())
             .on_click(cx.listener(|this, _, _, cx| {
                 this.speed_menu_open = !this.speed_menu_open;
                 this.info_open = false;
@@ -483,6 +498,7 @@ impl PlayerView {
     }
 
     fn speed_menu(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = self.palette;
         let bounds = self.speed_bounds.get();
         let viewport = window.viewport_size();
         let selected = self.speed_preview.unwrap_or(self.state.speed);
@@ -503,9 +519,9 @@ impl PlayerView {
             .flex()
             .flex_col()
             .rounded(px(7.))
-            .bg(rgb(0x202c3d))
+            .bg(rgb(colors.menu))
             .border_1()
-            .border_color(rgb(0x3b4d65))
+            .border_color(rgb(colors.menu_border))
             .shadow_lg()
             .children(SPEED_STEPS.into_iter().enumerate().map(|(index, speed)| {
                 div()
@@ -518,8 +534,16 @@ impl PlayerView {
                     .rounded(px(3.))
                     .text_size(px(12.))
                     .cursor_pointer()
-                    .when(speed == selected, |el| el.bg(rgb(BLUE)))
-                    .hover(|el| el.bg(rgb(0x36577d)))
+                    .when(speed == selected, |el| {
+                        el.bg(rgb(colors.accent)).text_color(rgb(colors.on_accent))
+                    })
+                    .hover(move |el| {
+                        el.bg(rgb(if speed == selected {
+                            colors.selected_menu_hover
+                        } else {
+                            colors.menu_hover
+                        }))
+                    })
                     .child(format!("{speed:.2}×"))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.set_speed(speed, cx);
@@ -537,20 +561,23 @@ impl PlayerView {
     }
 
     fn settings_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = self.palette;
         let (label, color, enabled, hint) = match &self.update_check {
             CheckState::Checking => (
                 "확인 중…".to_owned(),
-                MUTED,
+                colors.muted,
                 false,
                 "최신 버전을 확인하고 있습니다.".to_owned(),
             ),
             CheckState::Current => (
                 "최신 버전".to_owned(),
-                0x65d6ac,
+                colors.success,
                 false,
                 "현재 최신 버전을 사용하고 있습니다.".to_owned(),
             ),
-            CheckState::Failed(error) => ("확인 실패".to_owned(), 0xffb580, false, error.clone()),
+            CheckState::Failed(error) => {
+                ("확인 실패".to_owned(), colors.warning, false, error.clone())
+            }
             CheckState::Available(release) => {
                 let (label, enabled, hint) = match &self.update_install {
                     InstallState::Idle => (
@@ -589,12 +616,12 @@ impl PlayerView {
                         format!("설치 파일을 열었습니다. {}", update::install_hint()),
                     ),
                 };
-                (label, BLUE, enabled, hint)
+                (label, colors.accent, enabled, hint)
             }
         };
         let ready = matches!(self.update_install, InstallState::Ready(_));
         let action = if matches!(self.update_check, CheckState::Available(_)) {
-            settings_button("install-update", label, enabled)
+            settings_button(colors, "install-update", label, enabled)
                 .when(enabled, |el| {
                     el.on_click(cx.listener(move |this, _, _, cx| {
                         if ready {
@@ -641,8 +668,67 @@ impl PlayerView {
                         div()
                             .id("update-status")
                             .flex_shrink_0()
-                            .tooltip(move |_, cx| cx.new(|_| TextTooltip(hint.clone())).into())
+                            .tooltip(move |_, cx| {
+                                cx.new(|_| TextTooltip(hint.clone(), colors)).into()
+                            })
                             .child(action),
+                    ),
+            )
+            .child(
+                div()
+                    .id("theme-row")
+                    .py(px(8.))
+                    .child(div().mb(px(6.)).text_size(px(12.)).child("테마"))
+                    .child(
+                        div().flex().gap(px(4.)).children(
+                            [
+                                (Theme::Light, "밝은 테마"),
+                                (Theme::Dark, "다크 테마"),
+                                (Theme::System, "시스템 설정"),
+                            ]
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, (theme, label))| {
+                                let selected = self.preferences.theme == theme;
+                                div()
+                                    .id(("theme-option", index))
+                                    .flex_1()
+                                    .h(px(28.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(5.))
+                                    .border_1()
+                                    .border_color(rgb(if selected {
+                                        colors.accent
+                                    } else {
+                                        colors.line
+                                    }))
+                                    .bg(rgb(if selected {
+                                        colors.accent
+                                    } else {
+                                        colors.panel
+                                    }))
+                                    .text_color(rgb(if selected {
+                                        colors.on_accent
+                                    } else {
+                                        colors.text
+                                    }))
+                                    .text_size(px(12.))
+                                    .cursor_pointer()
+                                    .hover(move |el| {
+                                        el.bg(rgb(if selected {
+                                            colors.accent_hover
+                                        } else {
+                                            colors.hover
+                                        }))
+                                    })
+                                    .child(label)
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.set_theme(theme, window, cx)
+                                    }))
+                            }),
+                        ),
                     ),
             )
             .child(
@@ -662,7 +748,7 @@ impl PlayerView {
                                 div()
                                     .mt(px(4.))
                                     .text_size(px(11.))
-                                    .text_color(rgb(MUTED))
+                                    .text_color(rgb(colors.muted))
                                     .child("새로 실행할 때 기존 창에서 파일을 재생합니다."),
                             ),
                     )
@@ -674,15 +760,15 @@ impl PlayerView {
                             .flex_shrink_0()
                             .rounded_full()
                             .bg(rgb(if self.preferences.single_instance {
-                                BLUE
+                                colors.accent
                             } else {
-                                LINE
+                                colors.line
                             }))
                             .p(px(3.))
                             .flex()
                             .when(self.preferences.single_instance, |el| el.justify_end())
                             .cursor_pointer()
-                            .child(div().size(px(16.)).rounded_full().bg(rgb(TEXT)))
+                            .child(div().size(px(16.)).rounded_full().bg(rgb(colors.thumb)))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.preferences.single_instance =
                                     !this.preferences.single_instance;
@@ -696,7 +782,7 @@ impl PlayerView {
                 el.child(
                     div()
                         .text_size(px(11.))
-                        .text_color(rgb(0xffb580))
+                        .text_color(rgb(colors.warning))
                         .child(error),
                 )
             });
@@ -707,7 +793,7 @@ impl PlayerView {
             .left_0()
             .size_full()
             .occlude()
-            .bg(rgba(0x080d16df))
+            .bg(rgba(colors.overlay))
             .p(px(12.))
             .flex()
             .items_center()
@@ -727,9 +813,9 @@ impl PlayerView {
                     .flex()
                     .flex_col()
                     .rounded(px(10.))
-                    .bg(rgb(PANEL))
+                    .bg(rgb(colors.panel))
                     .border_1()
-                    .border_color(rgb(LINE))
+                    .border_color(rgb(colors.line))
                     .shadow_lg()
                     .on_click(|_, _, cx| cx.stop_propagation())
                     .child(
@@ -745,7 +831,7 @@ impl PlayerView {
                                     .flex()
                                     .items_center()
                                     .gap(px(8.))
-                                    .child(icon("settings", 18., BLUE))
+                                    .child(icon("settings", 18., colors.accent))
                                     .child(
                                         div()
                                             .text_size(px(13.))
@@ -753,18 +839,21 @@ impl PlayerView {
                                             .child("EdolWave · 설정"),
                                     ),
                             )
-                            .child(tool("close-settings", "close").on_click(cx.listener(
-                                |this, _, _, cx| {
-                                    this.settings_open = false;
-                                    cx.notify();
-                                },
-                            ))),
+                            .child(
+                                tool(colors, "close-settings", "close").on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        this.settings_open = false;
+                                        cx.notify();
+                                    },
+                                )),
+                            ),
                     )
                     .child(body),
             )
     }
 
     fn info_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = self.palette;
         let shortcuts = [
             (
                 "파일 열기",
@@ -791,7 +880,7 @@ impl PlayerView {
             .id("info-overlay")
             .absolute().top_0().left_0().size_full()
             .occlude()
-            .bg(rgba(0x080d16df))
+            .bg(rgba(colors.overlay))
             .p(px(12.))
             .flex().items_center().justify_center()
             .on_click(cx.listener(|this, _, _, cx| {
@@ -802,17 +891,17 @@ impl PlayerView {
                 div().id("info-panel").occlude()
                     .w_full().max_w(px(760.)).h_full().max_h(px(280.))
                     .flex().flex_col()
-                    .rounded(px(10.)).bg(rgb(PANEL))
-                    .border_1().border_color(rgb(LINE)).shadow_lg()
+                    .rounded(px(10.)).bg(rgb(colors.panel))
+                    .border_1().border_color(rgb(colors.line)).shadow_lg()
                     .on_click(|_, _, cx| cx.stop_propagation())
                     .child(
                         div().h(px(36.)).flex_shrink_0().px(px(12.))
                             .flex().items_center().justify_between()
                             .child(div().flex().items_center().gap(px(8.))
-                                .child(icon("info", 18., BLUE))
+                                .child(icon("info", 18., colors.accent))
                                 .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child("EdolWave · 정보"))
-                                .child(div().text_size(px(10.)).text_color(rgb(MUTED)).child(env!("CARGO_PKG_VERSION"))))
-                            .child(tool("close-info", "close").on_click(cx.listener(|this, _, _, cx| {
+                                .child(div().text_size(px(10.)).text_color(rgb(colors.muted)).child(env!("CARGO_PKG_VERSION"))))
+                            .child(tool(colors, "close-info", "close").on_click(cx.listener(|this, _, _, cx| {
                                 this.info_open = false;
                                 cx.notify();
                             })))
@@ -829,14 +918,14 @@ impl PlayerView {
                                                 div().h(px(20.)).flex_shrink_0().flex().items_center().justify_between().gap(px(6.))
                                                     .text_size(px(11.))
                                                     .child(label)
-                                                    .child(div().flex_shrink_0().text_color(rgb(MUTED)).child(key))
+                                                    .child(div().flex_shrink_0().text_color(rgb(colors.muted)).child(key))
                                             }))
                                     )
-                                    .child(div().w(px(1.)).flex_shrink_0().bg(rgb(LINE)))
+                                    .child(div().w(px(1.)).flex_shrink_0().bg(rgb(colors.line)))
                                     .child(
                                         div().flex_1().min_w_0().flex().flex_col().gap(px(8.))
-                                            .text_size(px(11.)).line_height(px(16.)).text_color(rgb(MUTED))
-                                            .child(heading("재생 안내").text_color(rgb(TEXT)))
+                                            .text_size(px(11.)).line_height(px(16.)).text_color(rgb(colors.muted))
+                                            .child(heading("재생 안내").text_color(rgb(colors.text)))
                                             .child("파형을 클릭하거나 드래그해 탐색합니다.")
                                             .child("볼륨·배속 위에서 휠로 조절합니다.")
                                             .child("여러 파일은 이전·다음 버튼으로 이동합니다.")
@@ -848,17 +937,19 @@ impl PlayerView {
     }
 
     fn controls(&self, narrow: bool, cx: &mut Context<Self>) -> Div {
+        let colors = self.palette;
         let transport = div()
             .flex()
             .flex_shrink_0()
             .items_center()
             .gap(px(8.))
             .child(
-                transport("previous", "previous", false)
+                transport(colors, "previous", "previous", false)
                     .on_click(cx.listener(|this, _, _, cx| this.navigate(-1, cx))),
             )
             .child(
                 transport(
+                    colors,
                     "play",
                     if self.state.playing { "pause" } else { "play" },
                     true,
@@ -866,11 +957,11 @@ impl PlayerView {
                 .on_click(cx.listener(|this, _, w, cx| this.play(w, cx))),
             )
             .child(
-                transport("next", "next", false)
+                transport(colors, "next", "next", false)
                     .on_click(cx.listener(|this, _, _, cx| this.navigate(1, cx))),
             )
             .child(
-                transport("stop", "stop", false).on_click(cx.listener(|this, _, _, cx| {
+                transport(colors, "stop", "stop", false).on_click(cx.listener(|this, _, _, cx| {
                     this.seek_preview.clear();
                     this.audio.send(Command::Stop);
                     cx.notify();
@@ -883,6 +974,7 @@ impl PlayerView {
             .gap(px(8.))
             .child(
                 tool(
+                    colors,
                     "mute",
                     if self.displayed_volume() == 0. {
                         "mute"
@@ -893,7 +985,7 @@ impl PlayerView {
                 .tooltip({
                     let percent = (self.displayed_volume() * 100.).round() as u32;
                     move |_, cx| {
-                        cx.new(|_| TextTooltip(format!("볼륨 {percent}% · 음소거 전환")))
+                        cx.new(|_| TextTooltip(format!("볼륨 {percent}% · 음소거 전환"), colors))
                             .into()
                     }
                 })
@@ -905,7 +997,7 @@ impl PlayerView {
                     div()
                         .w(px(28.))
                         .text_size(px(11.))
-                        .text_color(rgb(MUTED))
+                        .text_color(rgb(colors.muted))
                         .child(format!(
                             "{}%",
                             (self.displayed_volume() * 100.).round() as u32
@@ -917,12 +1009,12 @@ impl PlayerView {
             .flex_shrink_0()
             .items_center()
             .gap(px(if narrow { 6. } else { 10. }))
-            .when(narrow, |el| el.child(icon("speed", 20., MUTED)))
+            .when(narrow, |el| el.child(icon("speed", 20., colors.muted)))
             .when(!narrow, |el| {
                 el.child(
                     div()
                         .text_size(px(11.))
-                        .text_color(rgb(MUTED))
+                        .text_color(rgb(colors.muted))
                         .child("재생 속도"),
                 )
             })
@@ -937,18 +1029,24 @@ impl PlayerView {
             .px_2()
             .py_1()
             .rounded_md()
-            .when(narrow && self.preferences.repeat, |el| el.bg(rgb(0x203d60)))
-            .hover(|s| s.bg(rgb(PANEL)))
+            .when(narrow && self.preferences.repeat, |el| {
+                el.bg(rgb(colors.active))
+            })
+            .hover(move |s| s.bg(rgb(colors.panel)))
             .child(icon(
                 "repeat",
                 20.,
-                if self.preferences.repeat { BLUE } else { MUTED },
+                if self.preferences.repeat {
+                    colors.accent
+                } else {
+                    colors.muted
+                },
             ))
             .when(!narrow, |el| {
                 el.child(
                     div()
                         .text_size(px(11.))
-                        .text_color(rgb(MUTED))
+                        .text_color(rgb(colors.muted))
                         .child("반복 재생"),
                 )
                 .child(
@@ -956,11 +1054,15 @@ impl PlayerView {
                         .w(px(32.))
                         .h(px(19.))
                         .rounded_full()
-                        .bg(rgb(if self.preferences.repeat { BLUE } else { LINE }))
+                        .bg(rgb(if self.preferences.repeat {
+                            colors.accent
+                        } else {
+                            colors.line
+                        }))
                         .p(px(3.))
                         .flex()
                         .when(self.preferences.repeat, |d| d.justify_end())
-                        .child(div().size(px(13.)).rounded_full().bg(rgb(TEXT))),
+                        .child(div().size(px(13.)).rounded_full().bg(rgb(colors.thumb))),
                 )
             })
             .tooltip({
@@ -969,7 +1071,7 @@ impl PlayerView {
                 } else {
                     "반복 재생 꺼짐"
                 };
-                move |_, cx| cx.new(|_| TextTooltip(label.into())).into()
+                move |_, cx| cx.new(|_| TextTooltip(label.into(), colors)).into()
             })
             .on_click(cx.listener(|this, _, _, cx| this.toggle_repeat(cx)));
         div()
@@ -1048,6 +1150,7 @@ impl PlayerView {
     }
 
     fn waveform(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = self.palette;
         let wave = self.state.waveform.clone();
         let fraction = if self.state.duration.is_zero() {
             0.
@@ -1075,6 +1178,7 @@ impl PlayerView {
                             wave.as_ref(),
                             bounds,
                             has_file.then_some(fraction),
+                            colors,
                             window,
                         );
                     },
@@ -1088,7 +1192,7 @@ impl PlayerView {
                         .top_2()
                         .right_0()
                         .text_size(px(11.))
-                        .text_color(rgb(MUTED))
+                        .text_color(rgb(colors.muted))
                         .child(if self.state.loading {
                             "파일 여는 중…"
                         } else {
@@ -1108,6 +1212,7 @@ impl PlayerView {
     }
 
     fn volume(&self, narrow: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = self.palette;
         let cell = self.volume_bounds.clone();
         let v = self.displayed_volume();
         div()
@@ -1124,7 +1229,7 @@ impl PlayerView {
                         window.paint_quad(quad(
                             Bounds::new(point(b.origin.x, y), size(b.size.width, px(4.))),
                             px(2.),
-                            rgb(LINE),
+                            rgb(colors.line),
                             px(0.),
                             transparent_black(),
                             BorderStyle::Solid,
@@ -1132,7 +1237,7 @@ impl PlayerView {
                         window.paint_quad(quad(
                             Bounds::new(point(b.origin.x, y), size(b.size.width * v, px(4.))),
                             px(2.),
-                            rgb(BLUE),
+                            rgb(colors.accent),
                             px(0.),
                             transparent_black(),
                             BorderStyle::Solid,
@@ -1143,7 +1248,7 @@ impl PlayerView {
                                 size(px(10.), px(10.)),
                             ),
                             px(5.),
-                            rgb(TEXT),
+                            rgb(colors.text),
                             px(0.),
                             transparent_black(),
                             BorderStyle::Solid,
@@ -1169,13 +1274,13 @@ impl PlayerView {
                             .items_center()
                             .justify_center()
                             .rounded(px(5.))
-                            .bg(rgb(PANEL))
+                            .bg(rgb(colors.panel))
                             .border_1()
-                            .border_color(rgb(LINE))
+                            .border_color(rgb(colors.line))
                             .shadow_lg()
                             .text_size(px(12.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(TEXT))
+                            .text_color(rgb(colors.text))
                             .cursor_default()
                             .child(format!("{}%", (v * 100.).round() as u32))
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()),
@@ -1202,6 +1307,7 @@ impl PlayerView {
 
 impl Render for PlayerView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = self.palette;
         if self.first_render {
             self.first_render = false;
             if let Some(path) = std::env::var_os("EDOLWAVE_STARTUP_LOG") {
@@ -1245,8 +1351,8 @@ impl Render for PlayerView {
             .relative()
             .flex()
             .flex_col()
-            .bg(rgb(BG))
-            .text_color(rgb(TEXT))
+            .bg(rgb(colors.bg))
+            .text_color(rgb(colors.text))
             .font_family(".SystemUIFont")
             .text_size(px(14.))
             .on_key_down(cx.listener(Self::key))
@@ -1302,7 +1408,7 @@ impl Render for PlayerView {
                             .gap(px(14.))
                             .cursor_default()
                             .window_control_area(WindowControlArea::Drag)
-                            .child(icon("wave", 26., 0x49caff))
+                            .child(icon("wave", 26., colors.logo))
                             .child(
                                 div()
                                     .min_w_0()
@@ -1314,17 +1420,19 @@ impl Render for PlayerView {
                             ),
                     )
                     .child(
-                        tool("open", "folder")
+                        tool(colors, "open", "folder")
                             .on_click(cx.listener(|this, _, window, cx| this.choose(window, cx))),
                     )
-                    .child(tool("info", "info").on_click(cx.listener(|this, _, _, cx| {
-                        this.info_open = !this.info_open;
-                        this.settings_open = false;
-                        this.speed_menu_open = false;
-                        cx.notify();
-                    })))
                     .child(
-                        tool("settings", "settings")
+                        tool(colors, "info", "info").on_click(cx.listener(|this, _, _, cx| {
+                            this.info_open = !this.info_open;
+                            this.settings_open = false;
+                            this.speed_menu_open = false;
+                            cx.notify();
+                        })),
+                    )
+                    .child(
+                        tool(colors, "settings", "settings")
                             .relative()
                             .when(
                                 matches!(self.update_check, CheckState::Available(_)),
@@ -1336,9 +1444,9 @@ impl Render for PlayerView {
                                             .right(px(2.))
                                             .size(px(8.))
                                             .rounded_full()
-                                            .bg(rgb(BLUE))
+                                            .bg(rgb(colors.accent))
                                             .border_1()
-                                            .border_color(rgb(BG)),
+                                            .border_color(rgb(colors.bg)),
                                     )
                                 },
                             )
@@ -1357,10 +1465,13 @@ impl Render for PlayerView {
                                 cx.notify();
                             })),
                     )
-                    .child(div().w(px(1.)).h(px(20.)).bg(rgb(LINE)).mx_1())
-                    .child(tool("minimize", "minimize").on_click(|_, w, _| w.minimize_window()))
-                    .child(tool("maximize", "maximize").on_click(|_, w, _| w.zoom_window()))
-                    .child(tool("close", "close").on_click(|_, _, cx| cx.quit())),
+                    .child(div().w(px(1.)).h(px(20.)).bg(rgb(colors.line)).mx_1())
+                    .child(
+                        tool(colors, "minimize", "minimize")
+                            .on_click(|_, w, _| w.minimize_window()),
+                    )
+                    .child(tool(colors, "maximize", "maximize").on_click(|_, w, _| w.zoom_window()))
+                    .child(tool(colors, "close", "close").on_click(|_, _, cx| cx.quit())),
             )
             .child(
                 div()
@@ -1388,11 +1499,11 @@ impl Render for PlayerView {
                                     .text_size(px(12.))
                                     .line_height(px(16.))
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .child(div().text_color(rgb(BLUE)).child(time(pos)))
-                                    .child(div().text_color(rgb(0x65758c)).child("/"))
+                                    .child(div().text_color(rgb(colors.accent)).child(time(pos)))
+                                    .child(div().text_color(rgb(colors.subtle)).child("/"))
                                     .child(
                                         div()
-                                            .text_color(rgb(MUTED))
+                                            .text_color(rgb(colors.muted))
                                             .child(time(self.state.duration)),
                                     ),
                             )
@@ -1401,7 +1512,7 @@ impl Render for PlayerView {
                                     .min_w_0()
                                     .text_ellipsis()
                                     .text_size(px(10.))
-                                    .text_color(rgb(0x65758c))
+                                    .text_color(rgb(colors.subtle))
                                     .child(metadata),
                             ),
                     ),
@@ -1414,7 +1525,7 @@ impl Render for PlayerView {
                         .flex_shrink_0()
                         .px(px(28.))
                         .text_size(px(11.))
-                        .text_color(rgb(0xffa9a9))
+                        .text_color(rgb(colors.error))
                         .text_ellipsis()
                         .child(error),
                 )
@@ -1430,7 +1541,7 @@ impl Render for PlayerView {
 fn icon(name: &'static str, size: f32, color: u32) -> Svg {
     svg().path(name).size(px(size)).text_color(rgb(color))
 }
-fn tool(id: &'static str, name: &'static str) -> Stateful<Div> {
+fn tool(colors: Palette, id: &'static str, name: &'static str) -> Stateful<Div> {
     div()
         .id(id)
         .size(px(30.))
@@ -1439,28 +1550,40 @@ fn tool(id: &'static str, name: &'static str) -> Stateful<Div> {
         .justify_center()
         .rounded(px(6.))
         .cursor_pointer()
-        .hover(move |s| s.bg(rgb(if name == "close" { 0x663142 } else { 0x263345 })))
-        .child(icon(name, 19., MUTED))
+        .hover(move |s| {
+            s.bg(rgb(if name == "close" {
+                colors.danger_hover
+            } else {
+                colors.tool_hover
+            }))
+        })
+        .child(icon(name, 19., colors.muted))
 }
-struct TextTooltip(String);
+struct TextTooltip(String, Palette);
 impl Render for TextTooltip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let colors = self.1;
         div()
             .max_w(px(300.))
             .p(px(8.))
             .rounded(px(6.))
-            .bg(rgb(PANEL))
+            .bg(rgb(colors.panel))
             .border_1()
-            .border_color(rgb(LINE))
+            .border_color(rgb(colors.line))
             .shadow_lg()
             .font_family(".SystemUIFont")
             .text_size(px(11.))
             .line_height(px(16.))
-            .text_color(rgb(TEXT))
+            .text_color(rgb(colors.text))
             .child(self.0.clone())
     }
 }
-fn settings_button(id: &'static str, label: String, enabled: bool) -> Stateful<Div> {
+fn settings_button(
+    colors: Palette,
+    id: &'static str,
+    label: String,
+    enabled: bool,
+) -> Stateful<Div> {
     div()
         .id(id)
         .h(px(26.))
@@ -1470,16 +1593,22 @@ fn settings_button(id: &'static str, label: String, enabled: bool) -> Stateful<D
         .items_center()
         .justify_center()
         .rounded(px(5.))
-        .bg(rgb(BLUE))
-        .text_color(rgb(TEXT))
+        .bg(rgb(colors.accent))
+        .text_color(rgb(colors.on_accent))
         .text_size(px(11.))
         .when(enabled, |el| {
-            el.cursor_pointer().hover(|el| el.bg(rgb(0x55a0ff)))
+            el.cursor_pointer()
+                .hover(move |el| el.bg(rgb(colors.accent_hover)))
         })
         .when(!enabled, |el| el.opacity(0.5))
         .child(label)
 }
-fn transport(id: &'static str, name: &'static str, primary: bool) -> Stateful<Div> {
+fn transport(
+    colors: Palette,
+    id: &'static str,
+    name: &'static str,
+    primary: bool,
+) -> Stateful<Div> {
     div()
         .id(id)
         .w(px(32.))
@@ -1487,14 +1616,32 @@ fn transport(id: &'static str, name: &'static str, primary: bool) -> Stateful<Di
         .flex_shrink_0()
         .rounded(px(6.))
         .border_1()
-        .border_color(rgb(if primary { 0x62a7ff } else { LINE }))
-        .bg(rgb(if primary { BLUE } else { PANEL }))
+        .border_color(rgb(if primary {
+            colors.accent_border
+        } else {
+            colors.line
+        }))
+        .bg(rgb(if primary { colors.accent } else { colors.panel }))
         .flex()
         .items_center()
         .justify_center()
         .cursor_pointer()
-        .hover(move |s| s.bg(rgb(if primary { 0x55a0ff } else { 0x26364b })))
-        .child(icon(name, 18., TEXT))
+        .hover(move |s| {
+            s.bg(rgb(if primary {
+                colors.accent_hover
+            } else {
+                colors.hover
+            }))
+        })
+        .child(icon(
+            name,
+            18.,
+            if primary {
+                colors.on_accent
+            } else {
+                colors.text
+            },
+        ))
 }
 fn time(d: Duration) -> String {
     let ms = d.as_millis();

@@ -1,4 +1,5 @@
 //! Small, per-user preferences shared by all player windows.
+use crate::theme::Theme;
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 use std::{fs, io::Write, path::PathBuf};
@@ -10,6 +11,7 @@ pub struct Settings {
     pub volume: f32,
     pub speed: f32,
     pub repeat: bool,
+    pub theme: Theme,
 }
 
 impl Default for Settings {
@@ -19,6 +21,7 @@ impl Default for Settings {
             volume: 0.8,
             speed: 1.,
             repeat: false,
+            theme: Theme::default(),
         }
     }
 }
@@ -132,7 +135,7 @@ mod tests {
     fn concurrent_updates_merge_and_survive_reopening() {
         let directory = tempfile::tempdir().unwrap();
         std::thread::scope(|scope| {
-            for index in 0..4 {
+            for index in 0..5 {
                 let directory = directory.path();
                 scope.spawn(move || {
                     let store = Store {
@@ -143,7 +146,8 @@ mod tests {
                             0 => settings.single_instance = false,
                             1 => settings.volume = 0.35,
                             2 => settings.speed = 1.75,
-                            _ => settings.repeat = true,
+                            3 => settings.repeat = true,
+                            _ => settings.theme = Theme::Dark,
                         })
                         .unwrap();
                 });
@@ -159,7 +163,31 @@ mod tests {
                 volume: 0.35,
                 speed: 1.75,
                 repeat: true,
+                theme: Theme::Dark,
             }
         );
+    }
+
+    #[test]
+    fn theme_choices_survive_reopening_and_unknown_themes_keep_other_settings() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store {
+            directory: directory.path().into(),
+        };
+        for theme in [Theme::Light, Theme::Dark, Theme::System] {
+            store.update(|settings| settings.theme = theme).unwrap();
+            let reopened = Store {
+                directory: directory.path().into(),
+            };
+            assert_eq!(reopened.load().theme, theme);
+        }
+        fs::write(
+            directory.path().join("settings.json"),
+            br#"{"theme":"future_theme","volume":0.35}"#,
+        )
+        .unwrap();
+        let settings = store.load();
+        assert_eq!(settings.theme, Theme::System);
+        assert_eq!(settings.volume, 0.35);
     }
 }
