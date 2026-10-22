@@ -1,8 +1,7 @@
-use super::{PlayerView, TextTooltip, icon, tool};
+use super::{PlayerView, TextTooltip, icon, tool, window_drag::WindowDragArea};
 use gpui::{
     Context, Entity, FocusHandle, FontWeight, IntoElement, KeyDownEvent, Render, ScrollStrategy,
-    UniformListScrollHandle, WeakEntity, Window, WindowControlArea, div, prelude::*, px, rgb,
-    uniform_list,
+    UniformListScrollHandle, WeakEntity, Window, div, prelude::*, px, rgb, uniform_list,
 };
 
 pub(super) struct PlaylistView {
@@ -19,7 +18,7 @@ impl PlaylistView {
         cx: &mut Context<Self>,
     ) -> Self {
         let focus = cx.focus_handle();
-        window.focus(&focus);
+        window.focus(&focus, cx);
         // Playback notifies every frame; redraw this window only when its visible
         // state changes. Keep paths in the player rather than copying the queue.
         let mut previous = None;
@@ -199,7 +198,7 @@ impl Render for PlaylistView {
                             .flex()
                             .items_center()
                             .gap(px(8.))
-                            .window_control_area(WindowControlArea::Drag)
+                            .window_drag_area()
                             .child(icon("playlist", 20., colors.accent))
                             .child(
                                 div()
@@ -257,7 +256,7 @@ impl Render for PlaylistView {
                         el.child(
                             uniform_list("playlist-tracks", count, cx.processor(Self::rows))
                                 .size_full()
-                                .track_scroll(self.scroll.clone()),
+                                .track_scroll(&self.scroll),
                         )
                     }),
             )

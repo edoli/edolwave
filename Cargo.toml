@@ -11,7 +11,8 @@ rust-version = "1.96"
 anyhow = "1.0.104"
 async-channel = "2"
 dirs = "4"
-gpui = { version = "0.2.2", default-features = false, features = ["windows-manifest"] }
+gpui = { git = "https://github.com/edoli/zed", branch = "gpui-edol", default-features = false }
+gpui_platform = { git = "https://github.com/edoli/zed", branch = "gpui-edol", default-features = false }
 interprocess = { version = "2.4", features = ["tokio"] }
 rodio = { version = "0.23.0", default-features = false, features = ["playback", "symphonia-all", "symphonia-simd"] }
 semver = "1"
@@ -26,12 +27,10 @@ ureq = { version = "3", default-features = false, features = ["rustls"] }
 widestring = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-gpui = { version = "0.2.2", default-features = false, features = ["x11", "wayland"] }
-# GPUI's zed-async-tar -> xattr 0.2 uses ENOATTR, removed in libc 0.2.190.
-# Remove this compatibility pin after GPUI updates that transitive dependency.
-libc = "=0.2.189"
+gpui_platform = { git = "https://github.com/edoli/zed", branch = "gpui-edol", default-features = false, features = ["x11", "wayland"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+gpui_platform = { git = "https://github.com/edoli/zed", branch = "gpui-edol", default-features = false, features = ["font-kit"] }
 url = "2"
 
 [dev-dependencies]

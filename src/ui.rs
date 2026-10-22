@@ -6,8 +6,8 @@ use crate::waveform_view::WaveformCache;
 use gpui::{
     BorderStyle, Bounds, Context, Div, ExternalPaths, FocusHandle, FontWeight, IntoElement,
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, PathPromptOptions, Pixels, Render,
-    ScrollWheelEvent, Stateful, Svg, Timer, Window, WindowControlArea, canvas, div, point,
-    prelude::*, px, quad, rgb, rgba, size, svg, transparent_black,
+    ScrollEvent, Stateful, Svg, Window, canvas, div, point, prelude::*, px, quad, rgb, rgba, size,
+    svg, transparent_black,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -17,6 +17,9 @@ use std::{
 };
 
 mod playlist;
+mod window_drag;
+
+use window_drag::WindowDragArea;
 
 const SPEED_STEPS: [f32; 7] = [0.5, 0.75, 1., 1.25, 1.5, 1.75, 2.];
 
@@ -109,7 +112,7 @@ impl PlayerView {
             ..audio.snapshot()
         };
         let focus = cx.focus_handle();
-        window.focus(&focus);
+        window.focus(&focus, cx);
         let (update_events, receiver) = async_channel::bounded(32);
         cx.spawn(async move |this, cx| {
             while let Ok(event) = receiver.recv().await {
@@ -152,7 +155,9 @@ impl PlayerView {
         .detach();
         cx.spawn(async move |this, cx| {
             loop {
-                Timer::after(Duration::from_millis(33)).await;
+                cx.background_executor()
+                    .timer(Duration::from_millis(33))
+                    .await;
                 if this
                     .update(cx, |this, cx| {
                         if !this.volume_drag
@@ -364,7 +369,7 @@ impl PlayerView {
         self.info_open = false;
         self.settings_open = false;
         self.speed_menu_open = false;
-        window.focus(&self.focus);
+        window.focus(&self.focus, cx);
         window.activate_window();
         cx.notify();
     }
@@ -514,7 +519,7 @@ impl PlayerView {
         cx.notify();
     }
 
-    fn scroll_speed(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
+    fn scroll_speed(&mut self, event: &ScrollEvent, cx: &mut Context<Self>) {
         let delta = event.delta.pixel_delta(px(16.)).y;
         if delta != px(0.) {
             let speed = self.speed_preview.unwrap_or(self.state.speed);
@@ -575,7 +580,7 @@ impl PlayerView {
                 this.settings_open = false;
                 cx.notify();
             }))
-            .on_scroll_wheel(cx.listener(|this, event, _, cx| this.scroll_speed(event, cx)))
+            .on_scroll(cx.listener(|this, event, _, cx| this.scroll_speed(event, cx)))
     }
 
     fn speed_menu(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -632,7 +637,7 @@ impl PlayerView {
                         cx.notify();
                     }))
             }))
-            .on_scroll_wheel(cx.listener(|this, event, _, cx| this.scroll_speed(event, cx)))
+            .on_scroll(cx.listener(|this, event, _, cx| this.scroll_speed(event, cx)))
             .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
                 if !this.speed_bounds.get().contains(&event.position) {
                     this.speed_menu_open = false;
@@ -1385,7 +1390,7 @@ impl PlayerView {
                     this.set_volume_at(e.position.x, cx);
                 }),
             )
-            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
+            .on_scroll(cx.listener(|this, event: &ScrollEvent, _, cx| {
                 let delta = event.delta.pixel_delta(px(16.)).y;
                 if delta != px(0.) {
                     let step = if delta > px(0.) { 0.05 } else { -0.05 };
@@ -1498,7 +1503,7 @@ impl Render for PlayerView {
                             .items_center()
                             .gap(px(14.))
                             .cursor_default()
-                            .window_control_area(WindowControlArea::Drag)
+                            .window_drag_area()
                             .child(icon("wave", 26., colors.logo))
                             .child(
                                 div()

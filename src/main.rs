@@ -12,9 +12,7 @@ mod waveform;
 mod waveform_view;
 mod wsola;
 
-use gpui::{
-    App, Application, Bounds, TitlebarOptions, WindowBounds, WindowOptions, prelude::*, px, size,
-};
+use gpui::{App, Bounds, TitlebarOptions, WindowBounds, WindowOptions, prelude::*, px, size};
 use std::{path::PathBuf, time::Instant};
 
 fn main() -> anyhow::Result<()> {
@@ -27,7 +25,7 @@ fn main() -> anyhow::Result<()> {
     else {
         return Ok(());
     };
-    let application = Application::new().with_assets(assets::Icons);
+    let application = gpui_platform::application().with_assets(assets::Icons);
     #[cfg(target_os = "macos")]
     {
         let requests = _instance.request_sender();
@@ -84,7 +82,7 @@ fn main() -> anyhow::Result<()> {
             }
         })
         .detach();
-        cx.on_window_closed(move |cx| {
+        cx.on_window_closed(move |cx, _| {
             if window.read(cx).is_err() {
                 cx.quit();
             }
