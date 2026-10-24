@@ -59,6 +59,7 @@ panic = "abort"
 debug = 1
 
 [package.metadata.deb]
+maintainer-scripts = "target/deb-maintainer-scripts"
 name = "edolwave"
 profile = "release-dist"
 maintainer = "Daniel Jeon <edoli.mia@gmail.com>"
@@ -67,7 +68,6 @@ section = "sound"
 priority = "optional"
 depends = "$auto, libvulkan1, libxkbcommon-x11-0, libfontconfig1, libfreetype6"
 recommends = "xdg-desktop-portal, fonts-noto-cjk"
-maintainer-scripts = "packaging/debian"
 assets = [
     ["target/release/edolwave", "usr/bin/edolwave", "755"],
     ["packaging/dev.edoli.edolwave.desktop", "usr/share/applications/dev.edoli.edolwave.desktop", "644"],
