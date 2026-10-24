@@ -50,19 +50,6 @@ try {
     New-Item -ItemType Directory -Path $stage | Out-Null
     try {
         Copy-Item -LiteralPath $SourceExe -Destination (Join-Path $stage 'edolwave.exe')
-        Copy-Item -LiteralPath (Join-Path $projectRoot 'LICENSE'), (Join-Path $projectRoot 'README.md') -Destination $stage
-
-        # App-local MSVC runtime works for both the portable ZIP and per-user installs.
-        $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-        $vsPath = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-        if ($LASTEXITCODE -ne 0 -or -not $vsPath) { throw 'Cannot locate Visual Studio C++ redistributables.' }
-        $crt = Get-ChildItem -Path (Join-Path $vsPath 'VC\Redist\MSVC\*\x64\Microsoft.VC*.CRT') -Directory |
-            Sort-Object FullName -Descending | Select-Object -First 1
-        if (-not $crt) { throw 'Cannot locate the x64 MSVC runtime directory.' }
-        foreach ($dll in @('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll', 'concrt140.dll')) {
-            Copy-Item -LiteralPath (Join-Path $crt.FullName $dll) -Destination $stage
-        }
-
         $associationsFile = Join-Path $stage 'file-associations.iss'
         & (Join-Path $PSScriptRoot 'generate-associations.ps1') -OutputFile $associationsFile
         & $Compiler "/DAppVersion=$version" "/DSourceExe=$stage\edolwave.exe" "/DOutputPath=$OutputDirectory" "/DProjectRoot=$projectRoot" "/DAssociationsFile=$associationsFile" (Join-Path $projectRoot 'installer\edolwave.iss')
@@ -76,9 +63,9 @@ try {
             '{0}  {1}' -f $hash.Hash.ToLowerInvariant(), [IO.Path]::GetFileName($file)
         }
         [IO.File]::WriteAllText(
-            (Join-Path $OutputDirectory 'SHA256SUMS.txt'),
+            (Join-Path $OutputDirectory 'SHA256SUMS-windows.txt'),
             ($hashes -join "`n") + "`n", [Text.Encoding]::ASCII)
-        Get-Item -LiteralPath $installer, $portable, (Join-Path $OutputDirectory 'SHA256SUMS.txt') | Select-Object Name, Length
+        Get-Item -LiteralPath $installer, $portable, (Join-Path $OutputDirectory 'SHA256SUMS-windows.txt') | Select-Object Name, Length
     } finally {
         # stage is an absolute, newly created child of this project's target directory.
         $targetRoot = [IO.Path]::GetFullPath((Join-Path $projectRoot 'target')) + [IO.Path]::DirectorySeparatorChar

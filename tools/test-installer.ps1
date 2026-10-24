@@ -123,7 +123,7 @@ try {
             throw 'Installed executable version does not match Cargo.toml.'
         }
         foreach ($dll in @('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll', 'concrt140.dll')) {
-            if (-not (Test-Path -LiteralPath (Join-Path $InstallDirectory $dll))) { throw "Missing runtime: $dll" }
+            if (Test-Path -LiteralPath (Join-Path $InstallDirectory $dll)) { throw "Static CRT package unexpectedly includes runtime: $dll" }
         }
         Assert-Associations -Selected $case.Selected
         Write-Output "PASS: $($case.Name)"

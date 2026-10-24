@@ -83,22 +83,7 @@ case "${PACKAGE##*/}" in
         if [ "${PACKAGE##*/}" = 'edolwave-mac.zip' ]; then
             unzip -p "$PACKAGE" EdolWave.app/Contents/MacOS/edolwave > "$stage"
         else
-            unzip -p "$PACKAGE" usr/bin/edolwave > "$stage"
-            case "$EXE" in
-                */usr/bin/edolwave)
-                    app_root=${EXE%/usr/bin/edolwave}
-                    mkdir "$ROOT/payload"
-                    unzip -q "$PACKAGE" 'usr/lib/*' -d "$ROOT/payload"
-                    library_stage=$(mktemp -d "$app_root/usr/.edolwave-libs.XXXXXX")
-                    cp -R "$ROOT/payload/usr/lib/." "$library_stage/"
-                    library_target=$app_root/usr/lib
-                    library_backup=$(mktemp -d "$app_root/usr/.edolwave-old.XXXXXX")
-                    rmdir "$library_backup"
-                    if [ -d "$library_target" ]; then mv "$library_target" "$library_backup"; fi
-                    mv "$library_stage" "$library_target"
-                    library_stage=
-                    ;;
-            esac
+            unzip -p "$PACKAGE" edolwave > "$stage"
         fi
         [ -s "$stage" ]
         chmod 755 "$stage"

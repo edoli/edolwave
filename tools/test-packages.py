@@ -65,9 +65,7 @@ def test_linux(stage: Path) -> None:
     checksums("linux")
     portable = stage / "portable"
     run("unzip", "-q", DIST / "edolwave-linux.zip", "-d", portable)
-    assert os.access(portable / "AppRun", os.X_OK)
-    desktop = portable / "usr/share/applications/dev.edoli.edolwave.desktop"
-    run("desktop-file-validate", desktop)
+    assert os.access(portable / "edolwave", os.X_OK)
     image = DIST / "edolwave-installer-appimage.AppImage"
     run(image, "--appimage-extract", cwd=stage, stdout=subprocess.DEVNULL)
     assert os.access(stage / "squashfs-root/AppRun", os.X_OK)
@@ -89,7 +87,7 @@ def test_linux(stage: Path) -> None:
     env = dict(os.environ, EDOLWAVE_INSTANCE_SCOPE=f"ci-{uuid.uuid4()}", GPUI_BACKEND="X11")
     log_path = DIST / "linux-smoke.log"
     with log_path.open("wb") as log:
-        primary = subprocess.Popen([str(portable / "AppRun")], env=env, stdout=log, stderr=log)
+        primary = subprocess.Popen([str(portable / "edolwave")], env=env, stdout=log, stderr=log)
         try:
             end = time.monotonic() + 20
             while True:
@@ -102,7 +100,7 @@ def test_linux(stage: Path) -> None:
                 if time.monotonic() >= end:
                     raise TimeoutError(f"No player window: {log_path.read_text(errors='replace')}")
                 time.sleep(.05)
-            run(portable / "AppRun", env=env, stdout=log, stderr=log, timeout=10)
+            run(portable / "edolwave", env=env, stdout=log, stderr=log, timeout=10)
             assert primary.poll() is None
             after = run("xdotool", "search", "--onlyvisible", "--pid", primary.pid,
                         capture_output=True, text=True).stdout
