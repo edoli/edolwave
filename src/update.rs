@@ -305,7 +305,8 @@ fn transfer_verified(
 }
 
 pub fn package_name() -> &'static str {
-    if cfg!(target_os = "windows") {
+    #[cfg(windows)]
+    {
         if std::env::current_exe()
             .ok()
             .is_some_and(|exe| crate::windows_install::install_scope(&exe).is_some())
@@ -314,7 +315,9 @@ pub fn package_name() -> &'static str {
         } else {
             "edolwave-windows.zip"
         }
-    } else if cfg!(target_os = "macos") {
+    }
+    #[cfg(target_os = "macos")]
+    {
         if std::env::current_exe().ok().is_some_and(|exe| {
             exe.ancestors()
                 .any(|path| path.extension().is_some_and(|ext| ext == "app"))
@@ -323,15 +326,19 @@ pub fn package_name() -> &'static str {
         } else {
             "edolwave-mac.zip"
         }
-    } else if std::env::var_os("APPIMAGE").is_some() {
-        "edolwave-installer-appimage.AppImage"
-    } else if std::env::current_exe()
-        .ok()
-        .is_some_and(|exe| exe == Path::new("/usr/bin/edolwave"))
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
-        "edolwave-installer-deb.deb"
-    } else {
-        "edolwave-linux.zip"
+        if std::env::var_os("APPIMAGE").is_some() {
+            "edolwave-installer-appimage.AppImage"
+        } else if std::env::current_exe()
+            .ok()
+            .is_some_and(|exe| exe == Path::new("/usr/bin/edolwave"))
+        {
+            "edolwave-installer-deb.deb"
+        } else {
+            "edolwave-linux.zip"
+        }
     }
 }
 
