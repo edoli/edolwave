@@ -1,6 +1,6 @@
 [package]
 name = "edolwave"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2024"
 
 description = "A fast, native waveform audio player built with GPUI"
@@ -24,6 +24,7 @@ tokio = { version = "1", features = ["rt", "net", "time", "io-util", "sync", "ma
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 
 [target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_System_Registry"] }
 widestring = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -56,3 +57,19 @@ panic = "abort"
 
 [profile.dev]
 debug = 1
+
+[package.metadata.deb]
+name = "edolwave"
+profile = "release-dist"
+maintainer = "Daniel Jeon <edoli.mia@gmail.com>"
+copyright = "2026, Daniel Jeon"
+section = "sound"
+priority = "optional"
+depends = "$auto, libvulkan1, libxkbcommon-x11-0, libfontconfig1, libfreetype6"
+recommends = "xdg-desktop-portal, fonts-noto-cjk"
+maintainer-scripts = "packaging/debian"
+assets = [
+    ["target/release/edolwave", "usr/bin/edolwave", "755"],
+    ["packaging/dev.edoli.edolwave.desktop", "usr/share/applications/dev.edoli.edolwave.desktop", "644"],
+    ["icons/icon.png", "usr/share/icons/hicolor/512x512/apps/edolwave.png", "644"],
+]

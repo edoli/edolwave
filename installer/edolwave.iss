@@ -32,7 +32,6 @@ MinVersion=10.0
 OutputDir={#OutputPath}
 OutputBaseFilename=edolwave-installer-exe
 SetupIconFile={#ProjectRoot}\icons\app.ico
-LicenseFile={#ProjectRoot}\LICENSE
 UninstallDisplayIcon={app}\edolwave.exe
 Compression=lzma2/max
 SolidCompression=yes
@@ -71,8 +70,6 @@ Root: HKA; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueNa
 
 [Files]
 Source: "{#SourceExe}"; DestDir: "{app}"; DestName: "edolwave.exe"; Flags: ignoreversion
-Source: "{#ProjectRoot}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#ProjectRoot}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\EdolWave\EdolWave"; Filename: "{app}\edolwave.exe"; Tasks: startmenuicon; AppUserModelID: "dev.edoli.edolwave"

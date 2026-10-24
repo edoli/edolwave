@@ -1,7 +1,7 @@
 # Constant helper; all release metadata and paths are data, never interpolated code.
 $ErrorActionPreference = 'Stop'
 $taskDirectory = [IO.Path]::GetFullPath($env:EDOLWAVE_UPDATE_DIR)
-if ([IO.Path]::GetFileName($taskDirectory) -notmatch '^edolwave-update-[A-Za-z0-9]+$') {
+if ([IO.Path]::GetFileName($taskDirectory) -notmatch '^edolwave-update-[A-Za-z0-9-]+$') {
     throw 'Invalid update directory'
 }
 $context = [IO.File]::ReadAllText((Join-Path $taskDirectory 'context.json')) | ConvertFrom-Json
@@ -33,16 +33,13 @@ function Verify-Package {
 }
 
 function Get-InstallScope {
-    # Include the uninstall key so installations made by older releases work too.
     foreach ($scope in @('user', 'machine')) {
         $hive = if ($scope -eq 'user') { 'HKEY_CURRENT_USER' } else { 'HKEY_LOCAL_MACHINE' }
-        foreach ($key in @('Software\Edoli\EdolWave',
-            'Software\Microsoft\Windows\CurrentVersion\Uninstall\{C1E7C3EC-BA70-4575-8D0B-43FA62D8B9B0}_is1')) {
-            $record = Get-ItemProperty -LiteralPath ('Registry::' + $hive + '\' + $key) -ErrorAction SilentlyContinue
-            if ($record -and $record.InstallLocation -and
-                [IO.Path]::GetFullPath($record.InstallLocation).TrimEnd('\') -eq $installDirectory.TrimEnd('\')) {
-                return $scope
-            }
+        $record = Get-ItemProperty -LiteralPath ('Registry::' + $hive + '\Software\Edoli\EdolWave') -ErrorAction SilentlyContinue
+        if ($record -and $record.InstallLocation -and
+            (Resolve-Path -LiteralPath $record.InstallLocation -ErrorAction SilentlyContinue).ProviderPath.TrimEnd('\') -eq
+            (Resolve-Path -LiteralPath $installDirectory).ProviderPath.TrimEnd('\')) {
+            return $scope
         }
     }
     throw 'This installer copy is not registered at its current location. Reinstall it using Setup.'
@@ -103,7 +100,7 @@ try {
                 # Only the flat executable/runtime payload is installed. No archive
                 # path, symlink, or unrelated user file can become a destination.
                 if ($entry.FullName -ne $entry.Name -or
-                    $entry.Name -notmatch '^(edolwave\.exe|vcruntime140(_1)?\.dll|msvcp140\.dll|concrt140\.dll)$') { continue }
+                    $entry.Name -cne 'edolwave.exe') { continue }
                 if ($names.ContainsKey($entry.Name)) { throw 'Duplicate package entry' }
                 if (($entry.ExternalAttributes -shr 16 -band 0xF000) -eq 0xA000) { throw 'Package symlink is not allowed' }
                 $names[$entry.Name] = $true

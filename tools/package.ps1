@@ -45,6 +45,12 @@ try {
     } finally { $reader.Dispose() }
 
     New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
+    # Remove only obsolete generated artifacts left by earlier local packaging.
+    Get-ChildItem -LiteralPath $OutputDirectory -File | Where-Object {
+        $_.Name -match '^SHA256SUMS(?:-(windows|mac|linux))?\.txt$' -or
+        $_.Name -eq 'edot-update.txt' -or $_.Name -match '^Edot-Setup-[0-9]+\.[0-9]+\.[0-9]+-windows-x64\.exe$'
+    } | ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
+
     # Use a new stage each time so stale files cannot enter a later package.
     $stage = Join-Path $projectRoot ('target\package-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $stage | Out-Null
@@ -58,14 +64,12 @@ try {
         $installer = Join-Path $OutputDirectory 'edolwave-installer-exe.exe'
         $portable = Join-Path $OutputDirectory 'edolwave-windows.zip'
         Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $portable -Force
-        $hashes = foreach ($file in @($installer, $portable)) {
-            $hash = Get-FileHash -LiteralPath $file -Algorithm SHA256
-            '{0}  {1}' -f $hash.Hash.ToLowerInvariant(), [IO.Path]::GetFileName($file)
+        $checksums = @{}
+        foreach ($file in @($installer, $portable)) {
+            $checksums[[IO.Path]::GetFileName($file)] = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
         }
-        [IO.File]::WriteAllText(
-            (Join-Path $OutputDirectory 'SHA256SUMS-windows.txt'),
-            ($hashes -join "`n") + "`n", [Text.Encoding]::ASCII)
-        Get-Item -LiteralPath $installer, $portable, (Join-Path $OutputDirectory 'SHA256SUMS-windows.txt') | Select-Object Name, Length
+        [IO.File]::WriteAllText((Join-Path $OutputDirectory 'package-checksums-windows.json'), ($checksums | ConvertTo-Json), [Text.Encoding]::ASCII)
+        Get-Item -LiteralPath $installer, $portable | Select-Object Name, Length
     } finally {
         # stage is an absolute, newly created child of this project's target directory.
         $targetRoot = [IO.Path]::GetFullPath((Join-Path $projectRoot 'target')) + [IO.Path]::DirectorySeparatorChar

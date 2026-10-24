@@ -10,6 +10,8 @@ mod update;
 mod update_install;
 mod waveform;
 mod waveform_view;
+#[cfg(windows)]
+mod windows_install;
 mod wsola;
 
 use gpui::{App, Bounds, TitlebarOptions, WindowBounds, WindowOptions, prelude::*, px, size};
