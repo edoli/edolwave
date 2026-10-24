@@ -7,12 +7,13 @@ PACKAGE=$EDOLWAVE_UPDATE_PACKAGE
 PARENT=$EDOLWAVE_UPDATE_PARENT
 RESULT=$EDOLWAVE_CONFIG_DIR/update-result.txt
 committed=0
+replaced=0
 mount_dir=
 stage=
 backup=
-library_stage=
-library_backup=
-library_target=
+asset_stage=
+asset_backup=
+asset_target=
 case "${ROOT##*/}" in edolwave-update-*) ;; *) exit 1 ;; esac
 [ "${PACKAGE%/*}" = "$ROOT" ] || exit 1
 
@@ -30,13 +31,12 @@ finish() {
     trap - EXIT
     if [ "$status" -ne 0 ]; then
         printf 'Update failed. %s\n' "$(tail -c 2048 "$ROOT/install.log" 2>/dev/null || true)" > "$RESULT"
-        if [ -n "$backup" ] && [ -e "$backup" ]; then
+        if [ "$replaced" -eq 1 ] && [ -n "$backup" ] && [ -e "$backup" ]; then
             mv "$backup" "$EXE" || true
         fi
-        if [ -n "$library_backup" ] && [ -d "$library_backup" ]; then
-            # The target is the app-owned usr/lib directory, never a system lib directory.
-            if [ -d "$library_target" ]; then mv "$library_target" "$ROOT/failed-libraries"; fi
-            mv "$library_backup" "$library_target" || true
+        if [ -n "$asset_backup" ] && [ -d "$asset_backup" ]; then
+            if [ -d "$asset_target" ]; then mv "$asset_target" "$ROOT/failed-assets"; fi
+            mv "$asset_backup" "$asset_target" || true
         fi
     else
         rm -f "$RESULT"
@@ -50,11 +50,11 @@ finish() {
     if [ -n "$stage" ] && [ -f "$stage" ]; then rm -f "$stage"; fi
     if [ -n "$backup" ] && [ -f "$backup" ]; then rm -f "$backup"; fi
     # All extraction directories are freshly created children of this update's root.
-    for owned in "$ROOT/payload" "$ROOT/failed-libraries"; do
+    for owned in "$ROOT/payload" "$ROOT/failed-assets"; do
         case "$owned" in "$ROOT"/*) rm -rf "$owned" ;; esac
     done
-    for owned in "$library_stage" "$library_backup"; do
-        case "$owned" in "${EXE%/usr/bin/edolwave}/usr/".edolwave-*) rm -rf "$owned" ;; esac
+    for owned in "$asset_stage" "$asset_backup"; do
+        case "$owned" in "${EXE%/*}/".edolwave-assets.*) rm -rf "$owned" ;; esac
     done
     rm -f "$ROOT/context.json" "$ROOT/update.sh" "$ROOT/install-mac.sh" "$ROOT/restart.sh" "$ROOT/ready" "$ROOT/go" "$ROOT/go.pending" "$PACKAGE"
     if [ -n "$mount_dir" ]; then rmdir "$mount_dir" 2>/dev/null || true; fi
@@ -89,13 +89,17 @@ case "${PACKAGE##*/}" in
         chmod 755 "$stage"
         backup=$(mktemp "${EXE}.old.XXXXXX")
         cp -p "$EXE" "$backup"
+        replaced=1
         mv -f "$stage" "$EXE"
         stage=
         ;;
     edolwave-installer-appimage.AppImage)
+        backup=$(mktemp "${EXE}.old.XXXXXX")
+        cp -p "$EXE" "$backup"
         stage=$(mktemp "${EXE}.update.XXXXXX")
         cp "$PACKAGE" "$stage"
         chmod 755 "$stage"
+        replaced=1
         mv -f "$stage" "$EXE"
         stage=
         ;;
@@ -119,6 +123,7 @@ set -eu
 source_app=$1
 target_app=$2
 parent=${target_app%/*}
+if [ ! -w "$parent" ] || [ ! -w "$target_app" ]; then exit 77; fi
 work=$(mktemp -d "$parent/.edolwave-update.XXXXXX")
 cleanup() {
     if [ -d "$work/previous.app" ] && [ ! -d "$target_app" ]; then mv "$work/previous.app" "$target_app"; fi
@@ -138,8 +143,12 @@ on run argv
     set operation to "/bin/sh " & quoted form of installScript & " " & quoted form of sourceApp & " " & quoted form of targetApp
     try
         do shell script operation
-    on error
-        do shell script operation with administrator privileges
+    on error errorMessage number errorNumber
+        if errorNumber is 77 then
+            do shell script operation with administrator privileges
+        else
+            error errorMessage number errorNumber
+        end if
     end try
 end run
 APPLESCRIPT

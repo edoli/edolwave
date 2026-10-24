@@ -308,8 +308,7 @@ pub fn package_name() -> &'static str {
     if cfg!(target_os = "windows") {
         if std::env::current_exe()
             .ok()
-            .and_then(|p| p.parent().map(|p| p.join("unins000.exe")))
-            .is_some_and(|p| p.is_file())
+            .is_some_and(|exe| crate::windows_install::install_scope(&exe).is_some())
         {
             "edolwave-installer-exe.exe"
         } else {
