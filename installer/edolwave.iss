@@ -71,7 +71,6 @@ Root: HKA; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueNa
 
 [Files]
 Source: "{#SourceExe}"; DestDir: "{app}"; DestName: "edolwave.exe"; Flags: ignoreversion
-Source: "{#ExtractFilePath(SourceExe)}*.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#ProjectRoot}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#ProjectRoot}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 

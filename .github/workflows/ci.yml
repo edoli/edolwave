@@ -1,0 +1,136 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: 0
+  CARGO_BUILD_JOBS: 2
+  PKG_CONFIG_ALL_STATIC: 1
+  MACOSX_DEPLOYMENT_TARGET: 12.0
+
+jobs:
+  build:
+    name: Build (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows x64
+            suffix: windows
+          - os: macos-15
+            label: macOS Apple Silicon
+            suffix: mac
+          - os: ubuntu-24.04
+            label: Linux x64
+            suffix: linux
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Validate Cargo version and release tag
+        shell: python
+        run: |
+          import os, re, tomllib
+          version = tomllib.load(open('Cargo.toml', 'rb'))['package']['version']
+          if not re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version) or any(int(p) > 65535 for p in version.split('.')):
+              raise SystemExit(f'Invalid Cargo version: {version}')
+          if os.environ['GITHUB_REF_TYPE'] == 'tag' and os.environ['GITHUB_REF_NAME'] != f'v{version}':
+              raise SystemExit(f"Tag {os.environ['GITHUB_REF_NAME']} must equal v{version}")
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/debug
+            target/release-dist
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ github.repository }}-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', '.github/workflows/ci.yml') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-${{ github.repository }}-cargo-
+      - name: Locate Windows shader compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $fxc = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\fxc.exe" | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $fxc) { throw 'Windows SDK shader compiler not found' }
+          "GPUI_FXC_PATH=$($fxc.FullName)" >> $env:GITHUB_ENV
+      - name: Prepare macOS Metal compiler
+        if: runner.os == 'macOS'
+        run: |
+          if ! xcrun -sdk macosx metal --version; then xcodebuild -downloadComponent MetalToolchain; fi
+          xcrun -sdk macosx metal --version
+      - name: Install Linux build and packaging dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential clang cmake pkg-config libasound2-dev libfontconfig1-dev libfreetype6-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libvulkan1 libssl-dev libcurl4 desktop-file-utils dpkg-dev patchelf squashfs-tools file unzip
+      - name: Build optimized binary
+        run: cargo build --profile release-dist --locked
+      - name: Install Inno Setup
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./tools/install_inno.ps1
+      - name: Package Windows installer and ZIP
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./tools/package.ps1 -NoBuild
+      - name: Package macOS or Linux
+        if: runner.os != 'Windows'
+        run: python tools/package-unix.py --no-build
+      - name: Validate final packages
+        run: python tools/check-packages.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: edolwave-${{ matrix.suffix }}
+          path: |
+            target/dist/edolwave*
+            target/dist/SHA256SUMS-${{ matrix.suffix }}.txt
+          if-no-files-found: error
+          compression-level: 0
+
+  release:
+    name: Publish GitHub Release
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: edolwave-*
+          merge-multiple: true
+          path: dist
+      - name: Verify complete release assets and checksums
+        id: assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python tools/release-assets.py
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          make_latest: ${{ steps.assets.outputs.make_latest }}
